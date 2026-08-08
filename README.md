@@ -9,6 +9,7 @@ The bridge implements:
 - Per-camera login checks
 - Bounded local PTZ movement
 - Native local sleep and remote wake
+- Read-only sleep capability probing through the authenticated SDK connection
 - A token-protected HTTP API
 
 It does not replace RTSP/go2rtc video or the built-in EZVIZ integration. Sleep support

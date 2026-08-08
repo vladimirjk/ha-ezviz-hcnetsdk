@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import BridgeConfig, CameraConfig
+from .isapi_probe import NativeIsapiProbe
 from .power_control import NativePowerController
 
 LOGGER = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class SdkBindings:
     sdk_factory: Callable[[], Any]
     commands: dict[str, int]
     power_controller_factory: Callable[[Any], Any]
+    isapi_probe_factory: Callable[[Any], Any]
 
 
 @dataclass(slots=True)
@@ -51,6 +53,7 @@ def load_hikvision_bindings() -> SdkBindings:
             "right": PTZ_RIGHT,
         },
         power_controller_factory=NativePowerController,
+        isapi_probe_factory=NativeIsapiProbe,
     )
 
 
@@ -69,6 +72,7 @@ class HcNetSdkBackend:
         self._sdk = self._bindings.sdk_factory()
         self._sdk.init(log_level=1)
         self._power_controller = self._bindings.power_controller_factory(self._sdk)
+        self._isapi_probe = self._bindings.isapi_probe_factory(self._sdk)
         self._sdk_version = self._sdk.get_sdk_version()
         self._closed = False
         self._sessions = {
@@ -228,6 +232,30 @@ class HcNetSdkBackend:
         if previous is not None:
             result["previous_power_saving_control"] = previous
         return result
+
+    def probe_sleep(self, camera_id: str) -> dict[str, object]:
+        """Read sleep-related ISAPI capabilities without changing camera state."""
+        paths = (
+            "/ISAPI/System/consumptionMode/capabilities?format=json",
+            "/ISAPI/System/consumptionMode?format=json",
+            "/ISAPI/System/consumptionMode/capabilities",
+            "/ISAPI/System/consumptionMode",
+        )
+        session = self._session(camera_id)
+        with session.lock:
+            device = self._login_locked(session)
+            try:
+                queries = [self._isapi_probe.get(device, path) for path in paths]
+            except Exception:
+                self._disconnect_locked(session)
+                raise
+            self._disconnect_locked(session)
+
+        return {
+            "camera": camera_id,
+            "read_only": True,
+            "queries": queries,
+        }
 
     def close(self) -> None:
         if self._closed:

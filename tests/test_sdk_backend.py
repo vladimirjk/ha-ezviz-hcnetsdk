@@ -11,6 +11,7 @@ from test_config import valid_options
 
 class FakeDevice:
     start_channel = 1
+    user_id = 42
 
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int, bool]] = []
@@ -63,6 +64,15 @@ class FakePowerController:
         self.wake_calls.append(device)
 
 
+class FakeIsapiProbe:
+    def __init__(self, _sdk: FakeSdk) -> None:
+        self.get_calls: list[tuple[FakeDevice, str]] = []
+
+    def get(self, device: FakeDevice, path: str) -> dict[str, object]:
+        self.get_calls.append((device, path))
+        return {"request": f"GET {path}", "sdk_ok": True, "body": "{}"}
+
+
 class SdkBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.sdk = FakeSdk()
@@ -70,6 +80,7 @@ class SdkBackendTests(unittest.TestCase):
             sdk_factory=lambda: self.sdk,
             commands={"up": 21, "down": 22, "left": 23, "right": 24},
             power_controller_factory=FakePowerController,
+            isapi_probe_factory=FakeIsapiProbe,
         )
         self.sleeps: list[float] = []
         self.backend = HcNetSdkBackend(
@@ -78,6 +89,7 @@ class SdkBackendTests(unittest.TestCase):
             sleep=self.sleeps.append,
         )
         self.power = self.backend._power_controller
+        self.isapi_probe = self.backend._isapi_probe
 
     def tearDown(self) -> None:
         self.backend.close()
@@ -139,6 +151,22 @@ class SdkBackendTests(unittest.TestCase):
 
         self.assertEqual(result, {"camera": "cam1", "sleeping": False})
         self.assertEqual(self.power.wake_calls, [self.sdk.device])
+        self.assertTrue(self.sdk.device.logged_out)
+
+    def test_sleep_probe_uses_only_expected_get_paths_and_disconnects(self) -> None:
+        result = self.backend.probe_sleep("cam1")
+
+        self.assertTrue(result["read_only"])
+        self.assertEqual(len(result["queries"]), 4)
+        self.assertEqual(
+            [path for _device, path in self.isapi_probe.get_calls],
+            [
+                "/ISAPI/System/consumptionMode/capabilities?format=json",
+                "/ISAPI/System/consumptionMode?format=json",
+                "/ISAPI/System/consumptionMode/capabilities",
+                "/ISAPI/System/consumptionMode",
+            ],
+        )
         self.assertTrue(self.sdk.device.logged_out)
 
 

@@ -86,11 +86,31 @@ curl --fail-with-body \
 Allowed directions are `up`, `down`, `left`, and `right`. Duration is restricted to
 50-1500 milliseconds and speed to 1-7.
 
+## Read-only sleep capability probe
+
+Some EZVIZ firmware does not support the module-service command used by the sleep
+endpoint. Version 0.2.1 adds an ISAPI probe through the authenticated HCNetSDK session:
+
+```bash
+curl --fail-with-body \
+  --header "Authorization: Bearer YOUR_API_TOKEN" \
+  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep-probe
+```
+
+The probe sends only `GET` requests for consumption-mode capabilities and current
+state. It does not write configuration or change the camera. Its response includes the
+ISAPI body or status returned for each JSON and XML request.
+
 ## Manual sleep and wake test
 
 Sleep uses the camera module's HCNetSDK power-saving setting. The bridge first reads
 the complete setting, changes only the sleep byte, and writes it back. Wake uses the
 SDK's dedicated remote-power-on command.
+
+This legacy sleep path is not supported by every camera. In particular, an HCNetSDK
+error `23` while reading the module-service configuration means the camera rejected
+the command before any write was attempted. Use the read-only probe above instead of
+repeating that sleep request.
 
 Keep the built-in EZVIZ sleep switch available as a fallback during the first test.
 Put `cam2` to sleep with:

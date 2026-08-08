@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Add an authenticated, GET-only ISAPI sleep capability probe over HCNetSDK.
+- Query JSON and XML consumption-mode capabilities and current state without changing
+  camera configuration.
+
 ## 0.2.0
 
 - Add native HCNetSDK sleep and remote-wake control.

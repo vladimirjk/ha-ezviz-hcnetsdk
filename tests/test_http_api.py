@@ -17,6 +17,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.moves: list[tuple[str, str, int, int]] = []
         self.sleep_calls: list[tuple[str, bool]] = []
+        self.sleep_probe_calls: list[str] = []
 
     def status(self) -> dict[str, object]:
         return {"sdk_version": "test", "cameras": {"cam1": {"connected": False}}}
@@ -39,6 +40,12 @@ class FakeBackend:
             raise KeyError(camera_id)
         self.sleep_calls.append((camera_id, enabled))
         return {"camera": camera_id, "sleeping": enabled}
+
+    def probe_sleep(self, camera_id: str) -> dict[str, object]:
+        if camera_id != "cam1":
+            raise KeyError(camera_id)
+        self.sleep_probe_calls.append(camera_id)
+        return {"camera": camera_id, "read_only": True, "queries": []}
 
 
 class HttpApiTests(unittest.TestCase):
@@ -145,6 +152,23 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         assert isinstance(body, dict)
         self.assertEqual(body["error"], "invalid_request")
+
+    def test_sleep_probe_requires_token(self) -> None:
+        status, body = self.request("GET", "/v1/cameras/cam1/sleep-probe")
+
+        self.assertEqual(status, 401)
+        self.assertIsNone(body)
+
+    def test_sleep_probe_is_read_only_get(self) -> None:
+        status, body = self.request(
+            "GET",
+            "/v1/cameras/cam1/sleep-probe",
+            token=self.config.api_token,
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"camera": "cam1", "read_only": True, "queries": []})
+        self.assertEqual(self.backend.sleep_probe_calls, ["cam1"])
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
     """Create a request handler bound to one configuration and backend."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ezviz-hcnetsdk-bridge/0.2"
+        server_version = "ezviz-hcnetsdk-bridge/0.2.1"
         sys_version = ""
 
         def _json(self, status: HTTPStatus, body: object) -> None:
@@ -95,6 +95,29 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
             if path == "/v1/cameras":
                 if self._authorized():
                     self._json(HTTPStatus.OK, backend.status())
+                return
+            parts = [part for part in path.split("/") if part]
+            if len(parts) == 4 and parts[:2] == ["v1", "cameras"] and parts[3] == "sleep-probe":
+                if not self._authorized():
+                    return
+                camera_id = parts[2]
+                try:
+                    result = backend.probe_sleep(camera_id)
+                except KeyError as exc:
+                    self._json(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": "unknown_camera", "detail": str(exc)},
+                    )
+                    return
+                except Exception as exc:
+                    LOGGER.exception("Camera operation failed for %s", camera_id)
+                    error_code = getattr(exc, "error_code", None)
+                    response: dict[str, object] = {"error": "camera_operation_failed"}
+                    if isinstance(error_code, int):
+                        response["sdk_error_code"] = error_code
+                    self._json(HTTPStatus.BAD_GATEWAY, response)
+                    return
+                self._json(HTTPStatus.OK, result)
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
