@@ -30,7 +30,7 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
     """Create a request handler bound to one configuration and backend."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ezviz-hcnetsdk-bridge/0.1"
+        server_version = "ezviz-hcnetsdk-bridge/0.2"
         sys_version = ""
 
         def _json(self, status: HTTPStatus, body: object) -> None:
@@ -125,6 +125,11 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                     )
                     speed = self._bounded_integer(body, "speed", config.default_speed, 1, 7)
                     result = backend.move(camera_id, direction, duration_ms, speed)
+                elif operation == "sleep":
+                    enabled = body.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be a boolean")
+                    result = backend.set_sleep(camera_id, enabled)
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                     return

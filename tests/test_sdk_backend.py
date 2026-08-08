@@ -50,12 +50,26 @@ class FakeSdk:
         self.cleaned_up = True
 
 
+class FakePowerController:
+    def __init__(self, _sdk: FakeSdk) -> None:
+        self.sleep_calls: list[tuple[FakeDevice, int]] = []
+        self.wake_calls: list[FakeDevice] = []
+
+    def enter_sleep(self, device: FakeDevice, channel: int) -> int:
+        self.sleep_calls.append((device, channel))
+        return 0
+
+    def wake(self, device: FakeDevice) -> None:
+        self.wake_calls.append(device)
+
+
 class SdkBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.sdk = FakeSdk()
         bindings = SdkBindings(
             sdk_factory=lambda: self.sdk,
             commands={"up": 21, "down": 22, "left": 23, "right": 24},
+            power_controller_factory=FakePowerController,
         )
         self.sleeps: list[float] = []
         self.backend = HcNetSdkBackend(
@@ -63,6 +77,7 @@ class SdkBackendTests(unittest.TestCase):
             bindings=bindings,
             sleep=self.sleeps.append,
         )
+        self.power = self.backend._power_controller
 
     def tearDown(self) -> None:
         self.backend.close()
@@ -110,6 +125,21 @@ class SdkBackendTests(unittest.TestCase):
         self.backend.close()
         self.assertTrue(self.sdk.device.logged_out)
         self.assertTrue(self.sdk.cleaned_up)
+
+    def test_sleep_uses_configured_channel_and_disconnects(self) -> None:
+        result = self.backend.set_sleep("cam1", True)
+
+        self.assertEqual(result["sleeping"], True)
+        self.assertEqual(result["previous_power_saving_control"], 0)
+        self.assertEqual(self.power.sleep_calls, [(self.sdk.device, 1)])
+        self.assertTrue(self.sdk.device.logged_out)
+
+    def test_wake_uses_remote_power_control_and_disconnects(self) -> None:
+        result = self.backend.set_sleep("cam1", False)
+
+        self.assertEqual(result, {"camera": "cam1", "sleeping": False})
+        self.assertEqual(self.power.wake_calls, [self.sdk.device])
+        self.assertTrue(self.sdk.device.logged_out)
 
 
 if __name__ == "__main__":

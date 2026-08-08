@@ -86,6 +86,37 @@ curl --fail-with-body \
 Allowed directions are `up`, `down`, `left`, and `right`. Duration is restricted to
 50-1500 milliseconds and speed to 1-7.
 
+## Manual sleep and wake test
+
+Sleep uses the camera module's HCNetSDK power-saving setting. The bridge first reads
+the complete setting, changes only the sleep byte, and writes it back. Wake uses the
+SDK's dedicated remote-power-on command.
+
+Keep the built-in EZVIZ sleep switch available as a fallback during the first test.
+Put `cam2` to sleep with:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header "Authorization: Bearer YOUR_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"enabled":true}' \
+  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep
+```
+
+Wake it with the same endpoint and `false`:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header "Authorization: Bearer YOUR_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"enabled":false}' \
+  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep
+```
+
+The video stream can take several seconds to reconnect after wake.
+
 ## Home Assistant configuration
 
 Add this to `secrets.yaml`:
@@ -106,6 +137,14 @@ rest_command:
       Content-Type: application/json
     payload: >-
       {"direction":"{{ direction }}","duration_ms":{{ duration_ms | default(250) }},"speed":{{ speed | default(3) }}}
+  ezviz_local_sleep:
+    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/sleep"
+    method: POST
+    headers:
+      Authorization: !secret ezviz_hcnetsdk_authorization
+      Content-Type: application/json
+    payload: >-
+      {"enabled":{{ enabled | tojson }}}
 ```
 
 If `configuration.yaml` already has a top-level `rest_command:` section, add only
@@ -151,12 +190,20 @@ ptz:
 shortcuts:
   - name: Sleep
     icon: mdi:sleep
-    service: switch.toggle
+    service: rest_command.ezviz_local_sleep
     service_data:
-      entity_id: switch.cam2_sleep
+      camera: cam2
+      enabled: true
+  - name: Wake
+    icon: mdi:weather-sunny
+    service: rest_command.ezviz_local_sleep
+    service_data:
+      camera: cam2
+      enabled: false
 ```
 
-Sleep remains on the built-in EZVIZ integration until its local SDK command is known.
+Local sleep and wake are experimental. The existing built-in EZVIZ integration can
+remain configured as a fallback.
 
 ## Errors
 

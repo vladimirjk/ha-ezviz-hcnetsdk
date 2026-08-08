@@ -16,6 +16,7 @@ from test_config import valid_options
 class FakeBackend:
     def __init__(self) -> None:
         self.moves: list[tuple[str, str, int, int]] = []
+        self.sleep_calls: list[tuple[str, bool]] = []
 
     def status(self) -> dict[str, object]:
         return {"sdk_version": "test", "cameras": {"cam1": {"connected": False}}}
@@ -32,6 +33,12 @@ class FakeBackend:
             raise KeyError(camera_id)
         self.moves.append((camera_id, direction, duration_ms, speed))
         return {"camera": camera_id, "direction": direction}
+
+    def set_sleep(self, camera_id: str, enabled: bool) -> dict[str, object]:
+        if camera_id != "cam1":
+            raise KeyError(camera_id)
+        self.sleep_calls.append((camera_id, enabled))
+        return {"camera": camera_id, "sleeping": enabled}
 
 
 class HttpApiTests(unittest.TestCase):
@@ -116,6 +123,28 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         assert isinstance(body, dict)
         self.assertEqual(body["error"], "unknown_camera")
+
+    def test_sleep_accepts_boolean(self) -> None:
+        status, body = self.request(
+            "POST",
+            "/v1/cameras/cam1/sleep",
+            {"enabled": True},
+            token=self.config.api_token,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"camera": "cam1", "sleeping": True})
+        self.assertEqual(self.backend.sleep_calls, [("cam1", True)])
+
+    def test_sleep_rejects_non_boolean(self) -> None:
+        status, body = self.request(
+            "POST",
+            "/v1/cameras/cam1/sleep",
+            {"enabled": "true"},
+            token=self.config.api_token,
+        )
+        self.assertEqual(status, 400)
+        assert isinstance(body, dict)
+        self.assertEqual(body["error"], "invalid_request")
 
 
 if __name__ == "__main__":

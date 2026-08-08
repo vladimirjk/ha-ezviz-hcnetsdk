@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- Add native HCNetSDK sleep and remote-wake control.
+- Preserve the full device module configuration when enabling sleep.
+- Add Home Assistant REST commands and WebRTC card shortcuts for sleep and wake.
+
 ## 0.1.0
 
 - Add HCNetSDK initialization and per-camera login checks.

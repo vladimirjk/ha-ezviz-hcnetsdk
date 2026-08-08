@@ -3,15 +3,17 @@
 Experimental Home Assistant app (formerly add-on) for controlling compatible
 EZVIZ/Hikvision cameras locally through the HCNetSDK service on TCP port 8000.
 
-The first release deliberately implements only:
+The bridge implements:
 
 - HCNetSDK initialization
 - Per-camera login checks
 - Bounded local PTZ movement
+- Native local sleep and remote wake
 - A token-protected HTTP API
 
-It does not replace RTSP/go2rtc video or the built-in EZVIZ integration. Sleep and
-privacy control are not implemented because their local SDK commands are model-specific.
+It does not replace RTSP/go2rtc video or the built-in EZVIZ integration. Sleep support
+is experimental and depends on the camera firmware exposing the corresponding HCNetSDK
+commands.
 
 See [the app documentation](ezviz_hcnetsdk/DOCS.md) for installation and configuration.
 

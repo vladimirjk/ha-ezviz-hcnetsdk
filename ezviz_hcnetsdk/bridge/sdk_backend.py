@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import BridgeConfig, CameraConfig
+from .power_control import NativePowerController
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class SdkBindings:
 
     sdk_factory: Callable[[], Any]
     commands: dict[str, int]
+    power_controller_factory: Callable[[Any], Any]
 
 
 @dataclass(slots=True)
@@ -48,6 +50,7 @@ def load_hikvision_bindings() -> SdkBindings:
             "left": PTZ_LEFT,
             "right": PTZ_RIGHT,
         },
+        power_controller_factory=NativePowerController,
     )
 
 
@@ -65,6 +68,7 @@ class HcNetSdkBackend:
         self._sleep = sleep
         self._sdk = self._bindings.sdk_factory()
         self._sdk.init(log_level=1)
+        self._power_controller = self._bindings.power_controller_factory(self._sdk)
         self._sdk_version = self._sdk.get_sdk_version()
         self._closed = False
         self._sessions = {
@@ -198,6 +202,32 @@ class HcNetSdkBackend:
             "duration_ms": duration_ms,
             "speed": speed,
         }
+
+    def set_sleep(self, camera_id: str, enabled: bool) -> dict[str, object]:
+        session = self._session(camera_id)
+        with session.lock:
+            device = self._login_locked(session)
+            previous: int | None = None
+            try:
+                if enabled:
+                    previous = self._power_controller.enter_sleep(
+                        device,
+                        session.config.channel,
+                    )
+                else:
+                    self._power_controller.wake(device)
+            except Exception:
+                self._disconnect_locked(session)
+                raise
+            self._disconnect_locked(session)
+
+        result: dict[str, object] = {
+            "camera": camera_id,
+            "sleeping": enabled,
+        }
+        if previous is not None:
+            result["previous_power_saving_control"] = previous
+        return result
 
     def close(self) -> None:
         if self._closed:
