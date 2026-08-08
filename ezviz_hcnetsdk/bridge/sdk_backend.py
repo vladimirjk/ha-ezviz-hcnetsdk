@@ -240,27 +240,45 @@ class HcNetSdkBackend:
         return result
 
     def probe_sleep(self, camera_id: str) -> dict[str, object]:
-        """Read sleep-related ISAPI capabilities without changing camera state."""
+        """Read sleep-related ISAPI paths over SDK-over-TLS without changing state."""
+        session = self._session(camera_id)
+        camera = session.config
+        video_input_path = f"/ISAPI/System/Video/inputs/channels/{camera.channel}/privacyMask"
         paths = (
             SERVICES_SWITCH_PATH,
+            "/ISAPI/System/deviceInfo?format=json",
             "/ISAPI/System/deviceInfo",
+            "/ISAPI/System/capabilities?format=json",
             "/ISAPI/System/capabilities",
             "/ISAPI/System/consumptionMode/capabilities?format=json",
             "/ISAPI/System/consumptionMode?format=json",
+            f"{video_input_path}/capabilities",
+            video_input_path,
         )
-        session = self._session(camera_id)
         with session.lock:
-            device = self._login_locked(session)
+            self._disconnect_locked(session)
+            device = self._tls_login.login(
+                camera.host,
+                camera.username,
+                camera.password,
+                port=EZVIZ_TLS_PORT,
+            )
             try:
                 queries = [self._isapi_probe.get(device, path) for path in paths]
-            except Exception:
-                self._disconnect_locked(session)
-                raise
-            self._disconnect_locked(session)
+            finally:
+                try:
+                    self._tls_login.logout(device)
+                except Exception:
+                    LOGGER.exception(
+                        "SDK-over-TLS logout failed for camera %s",
+                        camera.camera_id,
+                    )
 
         return {
             "camera": camera_id,
             "read_only": True,
+            "transport": "sdk_over_tls",
+            "port": EZVIZ_TLS_PORT,
             "request_framing": "app_observed_crlf",
             "queries": queries,
         }

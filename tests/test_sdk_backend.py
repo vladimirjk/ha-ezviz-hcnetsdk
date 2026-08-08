@@ -209,18 +209,29 @@ class SdkBackendTests(unittest.TestCase):
         result = self.backend.probe_sleep("cam1")
 
         self.assertTrue(result["read_only"])
+        self.assertEqual(result["transport"], "sdk_over_tls")
+        self.assertEqual(result["port"], 8443)
         self.assertEqual(result["request_framing"], "app_observed_crlf")
-        self.assertEqual(len(result["queries"]), 5)
+        self.assertEqual(len(result["queries"]), 9)
         self.assertEqual(
             [path for _device, path in self.isapi_probe.get_calls],
             [
                 "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+                "/ISAPI/System/deviceInfo?format=json",
                 "/ISAPI/System/deviceInfo",
+                "/ISAPI/System/capabilities?format=json",
                 "/ISAPI/System/capabilities",
                 "/ISAPI/System/consumptionMode/capabilities?format=json",
                 "/ISAPI/System/consumptionMode?format=json",
+                "/ISAPI/System/Video/inputs/channels/1/privacyMask/capabilities",
+                "/ISAPI/System/Video/inputs/channels/1/privacyMask",
             ],
         )
+        self.assertEqual(
+            self.tls_login.login_calls,
+            [("192.168.0.10", "admin", "ABCDEF", 8443)],
+        )
+        self.assertEqual(self.sdk.login_calls, [])
         self.assertTrue(self.sdk.device.logged_out)
 
     def test_web_service_update_preserves_other_switches_and_verifies(self) -> None:

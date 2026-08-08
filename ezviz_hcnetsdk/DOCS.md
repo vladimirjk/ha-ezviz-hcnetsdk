@@ -97,10 +97,11 @@ curl --fail-with-body \
   http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep-probe
 ```
 
-The probe sends only `GET` requests. Version 0.2.2 uses the CRLF request framing seen
-in the EZVIZ Android app and checks the app's `servicesSwitch` endpoint, generic ISAPI
-reads, and consumption-mode capabilities/current state. It does not write configuration
-or change the camera. Its response includes the ISAPI body or status for each request.
+The probe sends only `GET` requests. Version 0.4.1 uses SDK-over-TLS on port 8443 and
+the CRLF request framing seen in the EZVIZ Android app. It checks the app's
+`servicesSwitch` endpoint, generic device capabilities, consumption mode, and the
+configured channel's privacy-mask paths. It does not write configuration or change the
+camera. Its response includes the ISAPI body or status for each request.
 
 ## Local web and ISAPI service
 

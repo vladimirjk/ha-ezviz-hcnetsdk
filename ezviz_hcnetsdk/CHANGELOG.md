@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Run the read-only sleep probe over SDK-over-TLS on port 8443.
+- Probe JSON/XML device capabilities, consumption mode, and privacy-mask paths.
+
 ## 0.4.0
 
 - Use EZVIZ Studio's SDK-over-TLS V40 login on port 8443 for `servicesSwitch`.

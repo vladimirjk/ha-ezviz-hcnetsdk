@@ -1,5 +1,5 @@
 name: EZVIZ HCNetSDK Bridge
-version: "0.4.0"
+version: "0.4.1"
 slug: ezviz_hcnetsdk
 description: Local PTZ and camera service control for compatible EZVIZ cameras over HCNetSDK
 url: https://github.com/vladimirjk/ha-ezviz-hcnetsdk

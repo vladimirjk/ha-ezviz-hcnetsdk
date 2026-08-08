@@ -30,7 +30,7 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
     """Create a request handler bound to one configuration and backend."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ezviz-hcnetsdk-bridge/0.4.0"
+        server_version = "ezviz-hcnetsdk-bridge/0.4.1"
         sys_version = ""
 
         def _json(self, status: HTTPStatus, body: object) -> None:
