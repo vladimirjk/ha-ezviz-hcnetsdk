@@ -1,0 +1,33 @@
+name: EZVIZ HCNetSDK Bridge
+version: "0.1.0"
+slug: ezviz_hcnetsdk
+description: Local PTZ control for compatible EZVIZ cameras over HCNetSDK port 8000
+url: https://github.com/vladimirjk/ha-ezviz-hcnetsdk
+arch:
+  - amd64
+startup: application
+boot: auto
+init: false
+watchdog: http://[HOST]:[PORT:8977]/health
+ports:
+  8977/tcp: 8977
+ports_description:
+  8977/tcp: Local token-protected control API
+options:
+  api_token: ""
+  default_duration_ms: 250
+  default_speed: 3
+  log_level: info
+  cameras: []
+schema:
+  api_token: password
+  default_duration_ms: int(50,1500)
+  default_speed: int(1,7)
+  log_level: list(debug|info|warning|error)
+  cameras:
+    - id: match(^[a-z][a-z0-9_-]{0,31}$)
+      host: str
+      port: port
+      username: str
+      password: password
+      channel: int(1,256)

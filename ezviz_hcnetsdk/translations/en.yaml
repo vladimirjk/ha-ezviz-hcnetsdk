@@ -1,0 +1,37 @@
+configuration:
+  api_token:
+    name: API token
+    description: Bearer token required by every camera-control request (minimum 16 characters)
+  default_duration_ms:
+    name: Default movement duration
+    description: Default PTZ movement duration in milliseconds
+  default_speed:
+    name: Default PTZ speed
+    description: Default HCNetSDK PTZ speed from 1 to 7
+  log_level:
+    name: Log level
+    description: App log verbosity
+  cameras:
+    name: Cameras
+    description: Cameras available through the local bridge
+    fields:
+      id:
+        name: Camera ID
+        description: Stable lowercase ID used in API calls, for example cam1
+      host:
+        name: Camera IP
+        description: Local IPv4 or IPv6 address
+      port:
+        name: SDK port
+        description: HCNetSDK service port, normally 8000
+      username:
+        name: Username
+        description: Local device username, normally admin
+      password:
+        name: Password
+        description: Local camera verification code or device password
+      channel:
+        name: Channel
+        description: PTZ channel number, normally 1 for a standalone camera
+network:
+  8977/tcp: Control API port

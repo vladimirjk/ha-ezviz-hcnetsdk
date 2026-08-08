@@ -1,0 +1,2 @@
+hikvision-sdk==0.0.2 \
+    --hash=sha256:8bf0e0cc0c4ea2c434bf8dba4682405539d6a9e92dc55ccdf2a394ded7620952
