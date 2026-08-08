@@ -108,6 +108,30 @@ class IsapiProbeTests(unittest.TestCase):
         self.assertFalse(result["sdk_ok"])
         self.assertEqual(result["sdk_error_code"], 23)
 
+    def test_put_json_uses_app_observed_request_framing(self) -> None:
+        result = self.probe.put_json(
+            FakeDevice(),
+            "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+            {"servicesSwitch": {"rtsp": 1, "web": 1}},
+        )
+
+        self.assertEqual(
+            self.sdk._sdk.calls,
+            [
+                (
+                    42,
+                    "PUT /ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json\r\n"
+                    '{"servicesSwitch":{"rtsp":1,"web":1}}\r\n',
+                    5000,
+                    5000,
+                )
+            ],
+        )
+        self.assertEqual(
+            result["request"],
+            "PUT /ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+        )
+
     def test_rejects_non_path_and_whitespace(self) -> None:
         for path in ("ISAPI/System", "/ISAPI/System\nPUT /danger"):
             with self.subTest(path=path), self.assertRaises(ValueError):

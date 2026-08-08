@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from bridge.config import parse_config
@@ -67,10 +68,33 @@ class FakePowerController:
 class FakeIsapiProbe:
     def __init__(self, _sdk: FakeSdk) -> None:
         self.get_calls: list[tuple[FakeDevice, str]] = []
+        self.put_calls: list[tuple[FakeDevice, str, dict[str, object]]] = []
+        self.services: dict[str, object] = {
+            "rtsp": 1,
+            "upnp": 1,
+            "web": 0,
+            "hiksdk": 1,
+        }
 
     def get(self, device: FakeDevice, path: str) -> dict[str, object]:
         self.get_calls.append((device, path))
-        return {"request": f"GET {path}", "sdk_ok": True, "body": "{}"}
+        return {
+            "request": f"GET {path}",
+            "sdk_ok": True,
+            "body": json.dumps({"servicesSwitch": self.services}),
+        }
+
+    def put_json(
+        self,
+        device: FakeDevice,
+        path: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        self.put_calls.append((device, path, payload))
+        services = payload.get("servicesSwitch")
+        assert isinstance(services, dict)
+        self.services = dict(services)
+        return {"request": f"PUT {path}", "sdk_ok": True, "body": '{"statusCode":1}'}
 
 
 class SdkBackendTests(unittest.TestCase):
@@ -170,6 +194,38 @@ class SdkBackendTests(unittest.TestCase):
             ],
         )
         self.assertTrue(self.sdk.device.logged_out)
+
+    def test_web_service_update_preserves_other_switches_and_verifies(self) -> None:
+        result = self.backend.set_web("cam1", True)
+
+        self.assertTrue(result["changed"])
+        self.assertTrue(result["web_enabled"])
+        self.assertEqual(result["before"]["web"], 0)
+        self.assertEqual(result["after"]["web"], 1)
+        self.assertEqual(result["after"]["rtsp"], 1)
+        self.assertEqual(result["after"]["hiksdk"], 1)
+        self.assertEqual(len(self.isapi_probe.put_calls), 1)
+        _device, _path, payload = self.isapi_probe.put_calls[0]
+        self.assertEqual(
+            payload,
+            {
+                "servicesSwitch": {
+                    "rtsp": 1,
+                    "upnp": 1,
+                    "web": 1,
+                    "hiksdk": 1,
+                }
+            },
+        )
+        self.assertTrue(self.sdk.device.logged_out)
+
+    def test_web_service_update_is_idempotent(self) -> None:
+        self.isapi_probe.services["web"] = 1
+
+        result = self.backend.set_web("cam1", True)
+
+        self.assertFalse(result["changed"])
+        self.assertEqual(self.isapi_probe.put_calls, [])
 
 
 if __name__ == "__main__":

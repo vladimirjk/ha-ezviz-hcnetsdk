@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+import json
+from collections.abc import Mapping
 from typing import Any
 
 BOOL = ctypes.c_int32
@@ -64,7 +66,7 @@ def _decode_buffer(buffer: ctypes.Array[ctypes.c_char], length: int) -> str:
 
 
 class NativeIsapiProbe:
-    """Issue bounded GET-only ISAPI requests through ``NET_DVR_STDXMLConfig``."""
+    """Issue bounded, explicitly constructed ISAPI requests through HCNetSDK."""
 
     def __init__(self, sdk: Any) -> None:
         self._sdk = sdk
@@ -76,16 +78,17 @@ class NativeIsapiProbe:
         ]
         self._raw.NET_DVR_STDXMLConfig.restype = BOOL
 
-    def get(self, device: Any, path: str) -> dict[str, object]:
-        """Run one read-only request and return both protocol and SDK results."""
+    @staticmethod
+    def _validate_path(path: str) -> None:
         if not path.startswith("/") or any(character.isspace() for character in path):
             raise ValueError("ISAPI probe path must be an absolute path without whitespace")
 
-        request_text = f"GET {path}"
-        # EZVIZ's Android HCNetSDK helper terminates the method/path line with CRLF.
-        # Some EZVIZ firmware rejects the otherwise valid un-terminated form with
-        # NET_DVR_NOSUPPORT before returning an ISAPI status body.
-        request_bytes = f"{request_text}\r\n".encode("ascii")
+    def _execute(
+        self,
+        device: Any,
+        request_text: str,
+        request_bytes: bytes,
+    ) -> dict[str, object]:
         request_buffer = ctypes.create_string_buffer(request_bytes)
         body_buffer = ctypes.create_string_buffer(OUTPUT_BUFFER_SIZE)
         status_buffer = ctypes.create_string_buffer(STATUS_BUFFER_SIZE)
@@ -129,3 +132,26 @@ class NativeIsapiProbe:
         if status:
             result["status"] = status
         return result
+
+    def get(self, device: Any, path: str) -> dict[str, object]:
+        """Run one read-only request and return both protocol and SDK results."""
+        self._validate_path(path)
+        request_text = f"GET {path}"
+        # EZVIZ's Android HCNetSDK helper terminates the method/path line with CRLF.
+        # Some EZVIZ firmware rejects the otherwise valid un-terminated form with
+        # NET_DVR_NOSUPPORT before returning an ISAPI status body.
+        request_bytes = f"{request_text}\r\n".encode("ascii")
+        return self._execute(device, request_text, request_bytes)
+
+    def put_json(
+        self,
+        device: Any,
+        path: str,
+        payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Send one JSON update using the framing observed in the EZVIZ app."""
+        self._validate_path(path)
+        request_text = f"PUT {path}"
+        body = json.dumps(dict(payload), separators=(",", ":"))
+        request_bytes = f"{request_text}\r\n{body}\r\n".encode()
+        return self._execute(device, request_text, request_bytes)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -11,9 +12,10 @@ from typing import Any
 
 from .config import BridgeConfig, CameraConfig
 from .isapi_probe import NativeIsapiProbe
-from .power_control import NativePowerController
+from .power_control import NativePowerController, SdkOperationError
 
 LOGGER = logging.getLogger(__name__)
+SERVICES_SWITCH_PATH = "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +238,7 @@ class HcNetSdkBackend:
     def probe_sleep(self, camera_id: str) -> dict[str, object]:
         """Read sleep-related ISAPI capabilities without changing camera state."""
         paths = (
-            "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+            SERVICES_SWITCH_PATH,
             "/ISAPI/System/deviceInfo",
             "/ISAPI/System/capabilities",
             "/ISAPI/System/consumptionMode/capabilities?format=json",
@@ -257,6 +259,77 @@ class HcNetSdkBackend:
             "read_only": True,
             "request_framing": "app_observed_crlf",
             "queries": queries,
+        }
+
+    @staticmethod
+    def _require_isapi_success(result: dict[str, object], action: str) -> None:
+        if result.get("sdk_ok") is True:
+            return
+        error_code = result.get("sdk_error_code")
+        if isinstance(error_code, int):
+            raise SdkOperationError(action, error_code)
+        raise RuntimeError(action)
+
+    def _read_services_switch(
+        self,
+        device: Any,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        result = self._isapi_probe.get(device, SERVICES_SWITCH_PATH)
+        self._require_isapi_success(result, "failed to read EZVIZ service switches")
+        body = result.get("body")
+        if not isinstance(body, str):
+            raise RuntimeError("camera returned no EZVIZ service-switch configuration")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("camera returned invalid EZVIZ service-switch JSON") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("camera returned an invalid EZVIZ service-switch object")
+        services = payload.get("servicesSwitch")
+        if not isinstance(services, dict):
+            raise RuntimeError("camera response is missing servicesSwitch")
+        web = services.get("web")
+        if isinstance(web, bool) or not isinstance(web, int) or web not in (0, 1):
+            raise RuntimeError("camera response has an invalid servicesSwitch.web value")
+        return payload, services
+
+    def set_web(self, camera_id: str, enabled: bool) -> dict[str, object]:
+        """Change only the EZVIZ local web-service switch and verify it."""
+        session = self._session(camera_id)
+        with session.lock:
+            device = self._login_locked(session)
+            try:
+                payload, before = self._read_services_switch(device)
+                before_web = bool(before["web"])
+                changed = before_web != enabled
+                if changed:
+                    updated_payload = dict(payload)
+                    updated_services = dict(before)
+                    updated_services["web"] = int(enabled)
+                    updated_payload["servicesSwitch"] = updated_services
+                    update_result = self._isapi_probe.put_json(
+                        device,
+                        SERVICES_SWITCH_PATH,
+                        updated_payload,
+                    )
+                    self._require_isapi_success(
+                        update_result,
+                        "failed to update EZVIZ local web service",
+                    )
+                _verified_payload, after = self._read_services_switch(device)
+                if bool(after["web"]) != enabled:
+                    raise RuntimeError("camera did not apply the local web-service switch")
+            except Exception:
+                self._disconnect_locked(session)
+                raise
+            self._disconnect_locked(session)
+
+        return {
+            "camera": camera_id,
+            "web_enabled": enabled,
+            "changed": changed,
+            "before": before,
+            "after": after,
         }
 
     def close(self) -> None:

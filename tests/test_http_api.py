@@ -18,6 +18,7 @@ class FakeBackend:
         self.moves: list[tuple[str, str, int, int]] = []
         self.sleep_calls: list[tuple[str, bool]] = []
         self.sleep_probe_calls: list[str] = []
+        self.web_calls: list[tuple[str, bool]] = []
 
     def status(self) -> dict[str, object]:
         return {"sdk_version": "test", "cameras": {"cam1": {"connected": False}}}
@@ -46,6 +47,12 @@ class FakeBackend:
             raise KeyError(camera_id)
         self.sleep_probe_calls.append(camera_id)
         return {"camera": camera_id, "read_only": True, "queries": []}
+
+    def set_web(self, camera_id: str, enabled: bool) -> dict[str, object]:
+        if camera_id != "cam1":
+            raise KeyError(camera_id)
+        self.web_calls.append((camera_id, enabled))
+        return {"camera": camera_id, "web_enabled": enabled, "changed": True}
 
 
 class HttpApiTests(unittest.TestCase):
@@ -169,6 +176,21 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, {"camera": "cam1", "read_only": True, "queries": []})
         self.assertEqual(self.backend.sleep_probe_calls, ["cam1"])
+
+    def test_web_service_accepts_boolean(self) -> None:
+        status, body = self.request(
+            "POST",
+            "/v1/cameras/cam1/web",
+            {"enabled": True},
+            token=self.config.api_token,
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            body,
+            {"camera": "cam1", "web_enabled": True, "changed": True},
+        )
+        self.assertEqual(self.backend.web_calls, [("cam1", True)])
 
 
 if __name__ == "__main__":

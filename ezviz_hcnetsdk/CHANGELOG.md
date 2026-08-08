@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Add an explicit read-modify-verify endpoint for the EZVIZ local `web` service.
+
 ## 0.2.2
 
 - Match the EZVIZ Android app's CRLF-terminated HCNetSDK ISAPI request framing.

@@ -102,6 +102,34 @@ in the EZVIZ Android app and checks the app's `servicesSwitch` endpoint, generic
 reads, and consumption-mode capabilities/current state. It does not write configuration
 or change the camera. Its response includes the ISAPI body or status for each request.
 
+## Local web and ISAPI service
+
+If the probe returns a `servicesSwitch` body with `"web":0`, the camera's local HTTP
+and standard ISAPI service is disabled. Version 0.3.0 can change only that switch while
+preserving the complete service configuration. Enabling it changes camera state:
+
+```bash
+curl --fail-with-body \
+  --request POST \
+  --header "Authorization: Bearer YOUR_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"enabled":true}' \
+  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/web
+```
+
+The bridge reads the complete `servicesSwitch` object, changes only `web`, writes it,
+then reads it again and fails unless the requested value is verified. Disable it by
+sending `{"enabled":false}` to the same endpoint.
+
+After enabling it, check the camera directly:
+
+```bash
+nc -zv CAMERA_IP 80
+curl --fail-with-body --digest --user admin http://CAMERA_IP/ISAPI/System/deviceInfo
+```
+
+The second command prompts for the camera password.
+
 ## Manual sleep and wake test
 
 Sleep uses the camera module's HCNetSDK power-saving setting. The bridge first reads
