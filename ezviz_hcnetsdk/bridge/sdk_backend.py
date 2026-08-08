@@ -13,6 +13,7 @@ from typing import Any
 from .config import BridgeConfig, CameraConfig
 from .isapi_probe import NativeIsapiProbe
 from .power_control import NativePowerController, SdkOperationError
+from .tls_login import EZVIZ_TLS_PORT, NativeTlsLogin
 
 LOGGER = logging.getLogger(__name__)
 SERVICES_SWITCH_PATH = "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json"
@@ -26,6 +27,7 @@ class SdkBindings:
     commands: dict[str, int]
     power_controller_factory: Callable[[Any], Any]
     isapi_probe_factory: Callable[[Any], Any]
+    tls_login_factory: Callable[[Any], Any]
 
 
 @dataclass(slots=True)
@@ -56,6 +58,7 @@ def load_hikvision_bindings() -> SdkBindings:
         },
         power_controller_factory=NativePowerController,
         isapi_probe_factory=NativeIsapiProbe,
+        tls_login_factory=NativeTlsLogin,
     )
 
 
@@ -75,6 +78,7 @@ class HcNetSdkBackend:
         self._sdk.init(log_level=1)
         self._power_controller = self._bindings.power_controller_factory(self._sdk)
         self._isapi_probe = self._bindings.isapi_probe_factory(self._sdk)
+        self._tls_login = self._bindings.tls_login_factory(self._sdk)
         self._sdk_version = self._sdk.get_sdk_version()
         self._closed = False
         self._sessions = {
@@ -293,11 +297,42 @@ class HcNetSdkBackend:
             raise RuntimeError("camera response has an invalid servicesSwitch.web value")
         return payload, services
 
+    @classmethod
+    def _require_services_switch_update_success(
+        cls,
+        result: dict[str, object],
+    ) -> None:
+        cls._require_isapi_success(
+            result,
+            "failed to update EZVIZ local web service",
+        )
+        body = result.get("body")
+        if not isinstance(body, str):
+            raise RuntimeError("camera returned no EZVIZ service-switch update status")
+        try:
+            response = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("camera returned invalid EZVIZ service-switch update JSON") from exc
+        if not isinstance(response, dict):
+            raise RuntimeError("camera returned an invalid EZVIZ service-switch update object")
+        status_code = response.get("statusCode")
+        if isinstance(status_code, bool) or status_code != 1:
+            raise RuntimeError(
+                f"camera rejected the EZVIZ service-switch update (statusCode={status_code!r})"
+            )
+
     def set_web(self, camera_id: str, enabled: bool) -> dict[str, object]:
         """Change only the EZVIZ local web-service switch and verify it."""
         session = self._session(camera_id)
         with session.lock:
-            device = self._login_locked(session)
+            self._disconnect_locked(session)
+            camera = session.config
+            device = self._tls_login.login(
+                camera.host,
+                camera.username,
+                camera.password,
+                port=EZVIZ_TLS_PORT,
+            )
             try:
                 payload, before = self._read_services_switch(device)
                 before_web = bool(before["web"])
@@ -312,17 +347,18 @@ class HcNetSdkBackend:
                         SERVICES_SWITCH_PATH,
                         updated_payload,
                     )
-                    self._require_isapi_success(
-                        update_result,
-                        "failed to update EZVIZ local web service",
-                    )
+                    self._require_services_switch_update_success(update_result)
                 _verified_payload, after = self._read_services_switch(device)
                 if bool(after["web"]) != enabled:
                     raise RuntimeError("camera did not apply the local web-service switch")
-            except Exception:
-                self._disconnect_locked(session)
-                raise
-            self._disconnect_locked(session)
+            finally:
+                try:
+                    self._tls_login.logout(device)
+                except Exception:
+                    LOGGER.exception(
+                        "SDK-over-TLS logout failed for camera %s",
+                        camera.camera_id,
+                    )
 
         return {
             "camera": camera_id,

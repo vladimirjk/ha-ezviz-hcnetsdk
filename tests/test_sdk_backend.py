@@ -75,6 +75,8 @@ class FakeIsapiProbe:
             "web": 0,
             "hiksdk": 1,
         }
+        self.put_body = '{"statusCode":1}'
+        self.apply_update = True
 
     def get(self, device: FakeDevice, path: str) -> dict[str, object]:
         self.get_calls.append((device, path))
@@ -93,18 +95,44 @@ class FakeIsapiProbe:
         self.put_calls.append((device, path, payload))
         services = payload.get("servicesSwitch")
         assert isinstance(services, dict)
-        self.services = dict(services)
-        return {"request": f"PUT {path}", "sdk_ok": True, "body": '{"statusCode":1}'}
+        response = json.loads(self.put_body)
+        if self.apply_update and response.get("statusCode") == 1:
+            self.services = dict(services)
+        return {"request": f"PUT {path}", "sdk_ok": True, "body": self.put_body}
+
+
+class FakeTlsLogin:
+    def __init__(self, device: FakeDevice) -> None:
+        self.device = device
+        self.login_calls: list[tuple[str, str, str, int]] = []
+        self.logout_calls: list[FakeDevice] = []
+
+    def login(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        *,
+        port: int,
+    ) -> FakeDevice:
+        self.login_calls.append((host, username, password, port))
+        return self.device
+
+    def logout(self, device: FakeDevice) -> None:
+        self.logout_calls.append(device)
+        device.logout()
 
 
 class SdkBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.sdk = FakeSdk()
+        self.tls_login = FakeTlsLogin(self.sdk.device)
         bindings = SdkBindings(
             sdk_factory=lambda: self.sdk,
             commands={"up": 21, "down": 22, "left": 23, "right": 24},
             power_controller_factory=FakePowerController,
             isapi_probe_factory=FakeIsapiProbe,
+            tls_login_factory=lambda _sdk: self.tls_login,
         )
         self.sleeps: list[float] = []
         self.backend = HcNetSdkBackend(
@@ -205,6 +233,11 @@ class SdkBackendTests(unittest.TestCase):
         self.assertEqual(result["after"]["rtsp"], 1)
         self.assertEqual(result["after"]["hiksdk"], 1)
         self.assertEqual(len(self.isapi_probe.put_calls), 1)
+        self.assertEqual(
+            self.tls_login.login_calls,
+            [("192.168.0.10", "admin", "ABCDEF", 8443)],
+        )
+        self.assertEqual(self.sdk.login_calls, [])
         _device, _path, payload = self.isapi_probe.put_calls[0]
         self.assertEqual(
             payload,
@@ -226,6 +259,24 @@ class SdkBackendTests(unittest.TestCase):
 
         self.assertFalse(result["changed"])
         self.assertEqual(self.isapi_probe.put_calls, [])
+
+    def test_web_service_rejects_unsuccessful_camera_status(self) -> None:
+        self.isapi_probe.put_body = '{"statusCode":7}'
+
+        with self.assertRaisesRegex(RuntimeError, "statusCode=7"):
+            self.backend.set_web("cam1", True)
+
+        self.assertEqual(self.isapi_probe.services["web"], 0)
+        self.assertEqual(self.tls_login.logout_calls, [self.sdk.device])
+
+    def test_web_service_requires_verified_change(self) -> None:
+        self.isapi_probe.apply_update = False
+
+        with self.assertRaisesRegex(RuntimeError, "did not apply"):
+            self.backend.set_web("cam1", True)
+
+        self.assertEqual(self.isapi_probe.services["web"], 0)
+        self.assertEqual(self.tls_login.logout_calls, [self.sdk.device])
 
 
 if __name__ == "__main__":

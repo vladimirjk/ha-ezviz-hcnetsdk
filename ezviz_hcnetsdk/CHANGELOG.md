@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Use EZVIZ Studio's SDK-over-TLS V40 login on port 8443 for `servicesSwitch`.
+- Require the camera's `statusCode: 1` response before verifying a switch update.
+
 ## 0.3.0
 
 - Add an explicit read-modify-verify endpoint for the EZVIZ local `web` service.

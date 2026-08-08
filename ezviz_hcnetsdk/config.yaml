@@ -1,7 +1,7 @@
 name: EZVIZ HCNetSDK Bridge
-version: "0.3.0"
+version: "0.4.0"
 slug: ezviz_hcnetsdk
-description: Local PTZ and sleep control for compatible EZVIZ cameras over HCNetSDK port 8000
+description: Local PTZ and camera service control for compatible EZVIZ cameras over HCNetSDK
 url: https://github.com/vladimirjk/ha-ezviz-hcnetsdk
 arch:
   - amd64

@@ -105,8 +105,9 @@ or change the camera. Its response includes the ISAPI body or status for each re
 ## Local web and ISAPI service
 
 If the probe returns a `servicesSwitch` body with `"web":0`, the camera's local HTTP
-and standard ISAPI service is disabled. Version 0.3.0 can change only that switch while
-preserving the complete service configuration. Enabling it changes camera state:
+and standard ISAPI service is disabled. Version 0.4.0 uses EZVIZ's SDK-over-TLS login
+on port 8443 to change only that switch while preserving the complete service
+configuration. Enabling it changes camera state:
 
 ```bash
 curl --fail-with-body \
@@ -118,8 +119,9 @@ curl --fail-with-body \
 ```
 
 The bridge reads the complete `servicesSwitch` object, changes only `web`, writes it,
-then reads it again and fails unless the requested value is verified. Disable it by
-sending `{"enabled":false}` to the same endpoint.
+requires the camera to return `statusCode: 1`, then reads it again and fails unless
+the requested value is verified. Disable it by sending `{"enabled":false}` to the
+same endpoint. Port 8443 must be reachable from the app container.
 
 After enabling it, check the camera directly:
 
