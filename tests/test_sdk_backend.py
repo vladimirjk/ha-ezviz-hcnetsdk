@@ -157,14 +157,16 @@ class SdkBackendTests(unittest.TestCase):
         result = self.backend.probe_sleep("cam1")
 
         self.assertTrue(result["read_only"])
-        self.assertEqual(len(result["queries"]), 4)
+        self.assertEqual(result["request_framing"], "app_observed_crlf")
+        self.assertEqual(len(result["queries"]), 5)
         self.assertEqual(
             [path for _device, path in self.isapi_probe.get_calls],
             [
+                "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+                "/ISAPI/System/deviceInfo",
+                "/ISAPI/System/capabilities",
                 "/ISAPI/System/consumptionMode/capabilities?format=json",
                 "/ISAPI/System/consumptionMode?format=json",
-                "/ISAPI/System/consumptionMode/capabilities",
-                "/ISAPI/System/consumptionMode",
             ],
         )
         self.assertTrue(self.sdk.device.logged_out)

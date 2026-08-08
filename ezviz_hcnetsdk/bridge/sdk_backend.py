@@ -236,10 +236,11 @@ class HcNetSdkBackend:
     def probe_sleep(self, camera_id: str) -> dict[str, object]:
         """Read sleep-related ISAPI capabilities without changing camera state."""
         paths = (
+            "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json",
+            "/ISAPI/System/deviceInfo",
+            "/ISAPI/System/capabilities",
             "/ISAPI/System/consumptionMode/capabilities?format=json",
             "/ISAPI/System/consumptionMode?format=json",
-            "/ISAPI/System/consumptionMode/capabilities",
-            "/ISAPI/System/consumptionMode",
         )
         session = self._session(camera_id)
         with session.lock:
@@ -254,6 +255,7 @@ class HcNetSdkBackend:
         return {
             "camera": camera_id,
             "read_only": True,
+            "request_framing": "app_observed_crlf",
             "queries": queries,
         }
 

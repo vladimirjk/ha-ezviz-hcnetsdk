@@ -82,7 +82,10 @@ class NativeIsapiProbe:
             raise ValueError("ISAPI probe path must be an absolute path without whitespace")
 
         request_text = f"GET {path}"
-        request_bytes = request_text.encode("ascii")
+        # EZVIZ's Android HCNetSDK helper terminates the method/path line with CRLF.
+        # Some EZVIZ firmware rejects the otherwise valid un-terminated form with
+        # NET_DVR_NOSUPPORT before returning an ISAPI status body.
+        request_bytes = f"{request_text}\r\n".encode("ascii")
         request_buffer = ctypes.create_string_buffer(request_bytes)
         body_buffer = ctypes.create_string_buffer(OUTPUT_BUFFER_SIZE)
         status_buffer = ctypes.create_string_buffer(STATUS_BUFFER_SIZE)

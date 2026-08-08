@@ -89,7 +89,7 @@ Allowed directions are `up`, `down`, `left`, and `right`. Duration is restricted
 ## Read-only sleep capability probe
 
 Some EZVIZ firmware does not support the module-service command used by the sleep
-endpoint. Version 0.2.1 adds an ISAPI probe through the authenticated HCNetSDK session:
+endpoint. The bridge includes an ISAPI probe through the authenticated HCNetSDK session:
 
 ```bash
 curl --fail-with-body \
@@ -97,9 +97,10 @@ curl --fail-with-body \
   http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep-probe
 ```
 
-The probe sends only `GET` requests for consumption-mode capabilities and current
-state. It does not write configuration or change the camera. Its response includes the
-ISAPI body or status returned for each JSON and XML request.
+The probe sends only `GET` requests. Version 0.2.2 uses the CRLF request framing seen
+in the EZVIZ Android app and checks the app's `servicesSwitch` endpoint, generic ISAPI
+reads, and consumption-mode capabilities/current state. It does not write configuration
+or change the camera. Its response includes the ISAPI body or status for each request.
 
 ## Manual sleep and wake test
 

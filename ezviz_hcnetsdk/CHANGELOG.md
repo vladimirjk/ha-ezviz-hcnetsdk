@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Match the EZVIZ Android app's CRLF-terminated HCNetSDK ISAPI request framing.
+- Probe the app-observed EZVIZ `servicesSwitch` endpoint and generic device/system
+  reads to distinguish unsupported sleep paths from an unsupported ISAPI tunnel.
+
 ## 0.2.1
 
 - Add an authenticated, GET-only ISAPI sleep capability probe over HCNetSDK.

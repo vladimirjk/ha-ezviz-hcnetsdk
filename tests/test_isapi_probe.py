@@ -90,7 +90,7 @@ class IsapiProbeTests(unittest.TestCase):
             [
                 (
                     42,
-                    "GET /ISAPI/System/consumptionMode/capabilities?format=json",
+                    "GET /ISAPI/System/consumptionMode/capabilities?format=json\r\n",
                     5000,
                     5000,
                 )
