@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import BridgeConfig, CameraConfig
-from .state_snapshot import HcNetSdkStateReader
+from .state_snapshot import TRANSPORT_ERROR_CODES, HcNetSdkStateReader
 
 LOGGER = logging.getLogger(__name__)
 
@@ -207,7 +207,19 @@ class HcNetSdkBackend:
         """Read diagnostic state without changing camera configuration."""
         session = self._session(camera_id)
         with session.lock:
-            device = self._login_locked(session)
+            try:
+                device = self._login_locked(session)
+            except Exception as exc:
+                error_code = getattr(exc, "error_code", None)
+                if not isinstance(error_code, int) or error_code not in TRANSPORT_ERROR_CODES:
+                    raise
+                snapshot = self._state_reader.unavailable_snapshot(error_code, stage="login")
+                return {
+                    "camera": camera_id,
+                    "read_only": True,
+                    "configured_channel": session.config.channel,
+                    **snapshot,
+                }
             try:
                 snapshot = self._state_reader.snapshot(
                     device.user_id,
@@ -218,6 +230,8 @@ class HcNetSdkBackend:
             except Exception:
                 self._disconnect_locked(session)
                 raise
+            if snapshot.get("responsive") is False:
+                self._disconnect_locked(session)
 
         return {
             "camera": camera_id,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+- Bound local SDK connect and receive waits to three seconds.
+- Stop a state snapshot after the first transport failure instead of waiting through
+  every remaining SDK query.
+- Return `responsive: false` as normal JSON when cloud Sleep Mode or a network outage
+  makes the local SDK unavailable.
+
 ## 0.5.0
 
 - Remove unsupported sleep/wake, ISAPI probe, and local web-service endpoints.

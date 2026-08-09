@@ -41,7 +41,9 @@ class FakeBackend:
         return {
             "camera": camera_id,
             "read_only": True,
+            "responsive": True,
             "supported_queries": 3,
+            "skipped_queries": 0,
             "queries": {},
         }
 
@@ -110,6 +112,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         assert isinstance(body, dict)
         self.assertTrue(body["read_only"])
+        self.assertTrue(body["responsive"])
         self.assertEqual(self.backend.snapshots, [("cam1", True)])
 
     def test_state_snapshot_rejects_invalid_raw_option(self) -> None:

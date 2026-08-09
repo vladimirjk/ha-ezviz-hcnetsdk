@@ -36,6 +36,7 @@ class FakeSdk:
         self.device = FakeDevice()
         self.login_calls: list[tuple[str, int, str, str]] = []
         self.cleaned_up = False
+        self.login_error: Exception | None = None
 
     def init(self, *, log_level: int) -> None:
         self.log_level = log_level
@@ -45,6 +46,8 @@ class FakeSdk:
 
     def login(self, host: str, port: int, username: str, password: str) -> FakeDevice:
         self.login_calls.append((host, port, username, password))
+        if self.login_error is not None:
+            raise self.login_error
         return self.device
 
     def cleanup(self) -> None:
@@ -54,6 +57,13 @@ class FakeSdk:
 class FakeStateReader:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int, bool]] = []
+        self.result: dict[str, object] = {
+            "responsive": True,
+            "supported_queries": 2,
+            "failed_queries": 7,
+            "skipped_queries": 0,
+            "queries": {},
+        }
 
     def snapshot(
         self,
@@ -64,7 +74,25 @@ class FakeStateReader:
         include_raw: bool = False,
     ) -> dict[str, object]:
         self.calls.append((user_id, channel, start_channel, include_raw))
-        return {"supported_queries": 2, "failed_queries": 7, "queries": {}}
+        return self.result
+
+    @staticmethod
+    def unavailable_snapshot(error_code: int, *, stage: str) -> dict[str, object]:
+        return {
+            "responsive": False,
+            "failure_stage": stage,
+            "transport_error_code": error_code,
+            "supported_queries": 0,
+            "failed_queries": 0,
+            "skipped_queries": 9,
+            "queries": {},
+        }
+
+
+class FakeSdkError(RuntimeError):
+    def __init__(self, error_code: int) -> None:
+        self.error_code = error_code
+        super().__init__(f"SDK error {error_code}")
 
 
 class SdkBackendTests(unittest.TestCase):
@@ -107,6 +135,36 @@ class SdkBackendTests(unittest.TestCase):
         self.assertTrue(result["read_only"])
         self.assertEqual(result["supported_queries"], 2)
         self.assertEqual(self.state_reader.calls, [(42, 1, 1, True)])
+
+    def test_unresponsive_snapshot_disconnects_stale_session(self) -> None:
+        self.state_reader.result = {
+            "responsive": False,
+            "transport_error_code": 10,
+            "supported_queries": 0,
+            "failed_queries": 1,
+            "skipped_queries": 8,
+            "queries": {},
+        }
+
+        result = self.backend.state_snapshot("cam1")
+
+        self.assertFalse(result["responsive"])
+        self.assertTrue(self.sdk.device.logged_out)
+
+    def test_transport_login_failure_is_returned_as_unresponsive_state(self) -> None:
+        self.sdk.login_error = FakeSdkError(7)
+
+        result = self.backend.state_snapshot("cam1")
+
+        self.assertFalse(result["responsive"])
+        self.assertEqual(result["failure_stage"], "login")
+        self.assertEqual(result["transport_error_code"], 7)
+
+    def test_authentication_login_failure_is_not_reported_as_sleep(self) -> None:
+        self.sdk.login_error = FakeSdkError(1)
+
+        with self.assertRaisesRegex(FakeSdkError, "SDK error 1"):
+            self.backend.state_snapshot("cam1")
 
     def test_unknown_camera_is_rejected(self) -> None:
         with self.assertRaisesRegex(KeyError, "unknown camera"):

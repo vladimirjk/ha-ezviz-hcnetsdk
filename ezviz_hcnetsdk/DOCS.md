@@ -102,6 +102,12 @@ An unsupported camera command remains in the response with `sdk_ok: false` and i
 `sdk_error_code`; the other reads continue. A successful query contains decoded
 `values` and a SHA-256 fingerprint of the exact SDK structure.
 
+The bridge bounds HCNetSDK connection and receive waits to three seconds. If the
+camera stops responding, the first transport failure stops the remaining reads and
+the endpoint returns HTTP 200 with `responsive: false`, `transport_error_code`, and
+the remaining query count in `skipped_queries`. This distinguishes an unavailable
+local SDK from unsupported individual commands without hanging a Home Assistant poll.
+
 To identify firmware fields changed by EZVIZ cloud Sleep Mode, capture both states:
 
 ```bash
@@ -202,11 +208,22 @@ sensor:
     timeout: 15
     value_template: "{{ value_json.supported_queries }}"
     json_attributes:
+      - responsive
+      - failure_stage
+      - transport_error_code
       - failed_queries
+      - skipped_queries
       - queries
 
 template:
   - binary_sensor:
+      - name: EZVIZ cam2 local SDK responsive
+        unique_id: ezviz_cam2_local_sdk_responsive
+        device_class: connectivity
+        availability: "{{ has_value('sensor.ezviz_cam2_sdk_state') }}"
+        state: >-
+          {{ state_attr('sensor.ezviz_cam2_sdk_state', 'responsive') == true }}
+
       - name: EZVIZ cam2 recording
         unique_id: ezviz_cam2_recording
         availability: >-
@@ -248,7 +265,9 @@ template:
 
 The recording entity is live status from `NET_DVR_GetDVRWorkState_V30`. The motion and
 privacy entities show whether those features are configured, not whether motion is
-currently being detected.
+currently being detected. `local SDK responsive` turns off during cloud Sleep Mode on
+the tested H6c, but it also turns off for a Wi-Fi outage or powered-off camera; it is a
+connectivity signal, not definitive proof of Sleep Mode.
 
 ## Errors
 

@@ -25,8 +25,20 @@ class FakeNative:
         self.config_calls: list[tuple[int, int, int, int, int]] = []
         self.work_payload: bytes | None = None
         self.work_calls: list[int] = []
+        self.connect_timeout_calls: list[tuple[int, int]] = []
+        self.receive_timeout_calls: list[int] = []
+        self.NET_DVR_SetConnectTime = FakeFunction(self._set_connect_timeout)
+        self.NET_DVR_SetRecvTimeOut = FakeFunction(self._set_receive_timeout)
         self.NET_DVR_GetDVRConfig = FakeFunction(self._get_config)
         self.NET_DVR_GetDVRWorkState_V30 = FakeFunction(self._get_work_state)
+
+    def _set_connect_timeout(self, wait_ms: int, attempts: int) -> int:
+        self.connect_timeout_calls.append((wait_ms, attempts))
+        return 1
+
+    def _set_receive_timeout(self, timeout_ms: int) -> int:
+        self.receive_timeout_calls.append(timeout_ms)
+        return 1
 
     def _get_config(
         self,
@@ -57,10 +69,10 @@ class FakeNative:
 class FakeSdk:
     def __init__(self, native: FakeNative) -> None:
         self._sdk = native
+        self.last_error = 23
 
-    @staticmethod
-    def get_last_error() -> int:
-        return 23
+    def get_last_error(self) -> int:
+        return self.last_error
 
 
 def buffer(size: int) -> bytearray:
@@ -70,7 +82,8 @@ def buffer(size: int) -> bytearray:
 class StateSnapshotTests(unittest.TestCase):
     def setUp(self) -> None:
         self.native = FakeNative()
-        self.reader = HcNetSdkStateReader(FakeSdk(self.native))
+        self.sdk = FakeSdk(self.native)
+        self.reader = HcNetSdkStateReader(self.sdk)
 
     def test_snapshot_preserves_failures_and_decodes_supported_queries(self) -> None:
         ptz = buffer(8)
@@ -104,8 +117,10 @@ class StateSnapshotTests(unittest.TestCase):
 
         result = self.reader.snapshot(42, 1, 1, include_raw=True)
 
+        self.assertTrue(result["responsive"])
         self.assertEqual(result["supported_queries"], 4)
         self.assertEqual(result["failed_queries"], 5)
+        self.assertEqual(result["skipped_queries"], 0)
         queries = result["queries"]
         self.assertEqual(queries["ptz_position"]["values"]["pan_degrees"], 175.0)
         self.assertEqual(queries["ptz_position"]["values"]["tilt_degrees"], 78.9)
@@ -137,6 +152,24 @@ class StateSnapshotTests(unittest.TestCase):
         self.assertEqual(calls[3293], (5, 136, 136))
         self.assertEqual(calls[3314], (5, 144, 144))
         self.assertEqual(self.native.work_calls, [42])
+        self.assertEqual(self.native.connect_timeout_calls, [(3000, 1)])
+        self.assertEqual(self.native.receive_timeout_calls, [3000])
+
+    def test_transport_failure_stops_remaining_queries(self) -> None:
+        self.sdk.last_error = 10
+
+        result = self.reader.snapshot(42, 1, 1)
+
+        self.assertFalse(result["responsive"])
+        self.assertEqual(result["transport_error_code"], 10)
+        self.assertEqual(result["supported_queries"], 0)
+        self.assertEqual(result["failed_queries"], 1)
+        self.assertEqual(result["skipped_queries"], 8)
+        self.assertEqual([call[1] for call in self.native.config_calls], [293])
+        self.assertEqual(self.native.work_calls, [])
+        self.assertTrue(result["queries"]["picture"]["skipped"])
+        self.assertEqual(result["queries"]["picture"]["channel"], 1)
+        self.assertTrue(result["queries"]["work_state"]["skipped"])
 
     def test_work_state_rejects_channel_outside_v30_range(self) -> None:
         with self.assertRaisesRegex(ValueError, "outside the V30 work-state"):

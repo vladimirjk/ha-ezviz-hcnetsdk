@@ -238,6 +238,10 @@ WORK_STATE_DISKS_OFFSET = 4
 DISK_STATE_SIZE = 12
 MAX_WORK_STATE_DISKS = 33
 MAX_WORK_STATE_CHANNELS = 64
+SDK_CONNECT_TIMEOUT_MS = 3000
+SDK_RECEIVE_TIMEOUT_MS = 3000
+TRANSPORT_ERROR_CODES = frozenset({7, 8, 9, 10, 11, 44, 47, 72, 73})
+TOTAL_QUERY_COUNT = len(CONFIG_QUERIES) + 1
 
 
 def _status_name(value: int, names: dict[int, str]) -> str:
@@ -311,6 +315,11 @@ class HcNetSdkStateReader:
         self._native = sdk._sdk
         self._get_last_error = sdk.get_last_error
 
+        self._native.NET_DVR_SetConnectTime.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        self._native.NET_DVR_SetConnectTime.restype = ctypes.c_int
+        self._native.NET_DVR_SetRecvTimeOut.argtypes = [ctypes.c_uint]
+        self._native.NET_DVR_SetRecvTimeOut.restype = ctypes.c_int
+
         self._native.NET_DVR_GetDVRConfig.argtypes = [
             ctypes.c_int,
             ctypes.c_uint,
@@ -322,6 +331,11 @@ class HcNetSdkStateReader:
         self._native.NET_DVR_GetDVRConfig.restype = ctypes.c_int
         self._native.NET_DVR_GetDVRWorkState_V30.argtypes = [ctypes.c_int, ctypes.c_void_p]
         self._native.NET_DVR_GetDVRWorkState_V30.restype = ctypes.c_int
+
+        if not self._native.NET_DVR_SetConnectTime(SDK_CONNECT_TIMEOUT_MS, 1):
+            raise RuntimeError("failed to configure HCNetSDK connection timeout")
+        if not self._native.NET_DVR_SetRecvTimeOut(SDK_RECEIVE_TIMEOUT_MS):
+            raise RuntimeError("failed to configure HCNetSDK receive timeout")
 
     @staticmethod
     def _base_result(spec: QuerySpec, channel: int) -> dict[str, object]:
@@ -392,6 +406,43 @@ class HcNetSdkStateReader:
         )
         return result
 
+    @staticmethod
+    def unavailable_snapshot(error_code: int, *, stage: str) -> dict[str, object]:
+        """Represent a bounded transport failure as state instead of an HTTP failure."""
+        return {
+            "responsive": False,
+            "failure_stage": stage,
+            "transport_error_code": error_code,
+            "supported_queries": 0,
+            "failed_queries": 0,
+            "skipped_queries": TOTAL_QUERY_COUNT,
+            "queries": {},
+        }
+
+    @staticmethod
+    def _skipped_config(spec: QuerySpec, channel: int) -> dict[str, object]:
+        result = HcNetSdkStateReader._base_result(spec, channel)
+        result.update(
+            {
+                "sdk_ok": None,
+                "skipped": True,
+                "reason": "transport_unavailable",
+            }
+        )
+        return result
+
+    @staticmethod
+    def _skipped_work_state(channel: int) -> dict[str, object]:
+        return {
+            "function": "NET_DVR_GetDVRWorkState_V30",
+            "structure": "NET_DVR_WORKSTATE_V30",
+            "structure_size": WORK_STATE_SIZE,
+            "channel": channel,
+            "sdk_ok": None,
+            "skipped": True,
+            "reason": "transport_unavailable",
+        }
+
     def snapshot(
         self,
         user_id: int,
@@ -405,21 +456,46 @@ class HcNetSdkStateReader:
         if not 0 <= channel_index < MAX_WORK_STATE_CHANNELS:
             raise ValueError("configured channel is outside the V30 work-state channel range")
 
-        queries = {
-            spec.name: self._get_config(user_id, channel, spec, include_raw)
-            for spec in CONFIG_QUERIES
-        }
-        device = queries["device"]
+        queries: dict[str, dict[str, object]] = {}
+        transport_error_code = None
+        for index, spec in enumerate(CONFIG_QUERIES):
+            result = self._get_config(user_id, channel, spec, include_raw)
+            queries[spec.name] = result
+            error_code = result.get("sdk_error_code")
+            if isinstance(error_code, int) and error_code in TRANSPORT_ERROR_CODES:
+                transport_error_code = error_code
+                for skipped_spec in CONFIG_QUERIES[index + 1 :]:
+                    queries[skipped_spec.name] = self._skipped_config(skipped_spec, channel)
+                break
+
+        device = queries.get("device", {})
         disk_count = None
         if device.get("sdk_ok") is True:
             values = device.get("values")
             if isinstance(values, dict) and isinstance(values.get("disk_count"), int):
                 disk_count = values["disk_count"]
-        queries["work_state"] = self._get_work_state(user_id, channel, channel_index, disk_count)
+
+        if transport_error_code is None:
+            work_state = self._get_work_state(user_id, channel, channel_index, disk_count)
+            queries["work_state"] = work_state
+            error_code = work_state.get("sdk_error_code")
+            if isinstance(error_code, int) and error_code in TRANSPORT_ERROR_CODES:
+                transport_error_code = error_code
+        else:
+            queries["work_state"] = self._skipped_work_state(channel)
 
         supported = sum(query.get("sdk_ok") is True for query in queries.values())
+        failed = sum(query.get("sdk_ok") is False for query in queries.values())
+        skipped = sum(query.get("skipped") is True for query in queries.values())
         return {
+            "responsive": transport_error_code is None,
+            **(
+                {"transport_error_code": transport_error_code}
+                if transport_error_code is not None
+                else {}
+            ),
             "supported_queries": supported,
-            "failed_queries": len(queries) - supported,
+            "failed_queries": failed,
+            "skipped_queries": skipped,
             "queries": queries,
         }
