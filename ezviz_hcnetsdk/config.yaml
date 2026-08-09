@@ -1,7 +1,7 @@
 name: EZVIZ HCNetSDK Bridge
-version: "0.5.1"
+version: "0.7.0"
 slug: ezviz_hcnetsdk
-description: Local PTZ control and read-only state for compatible EZVIZ cameras
+description: Extended local PTZ, alarm events, and state for compatible EZVIZ cameras
 url: https://github.com/vladimirjk/ha-ezviz-hcnetsdk
 arch:
   - amd64
@@ -17,12 +17,14 @@ options:
   api_token: ""
   default_duration_ms: 250
   default_speed: 3
+  alarm_hold_seconds: 10
   log_level: info
   cameras: []
 schema:
   api_token: password
   default_duration_ms: int(50,1500)
   default_speed: int(1,7)
+  alarm_hold_seconds: int(2,60)
   log_level: list(debug|info|warning|error)
   cameras:
     - id: match(^[a-z][a-z0-9_-]{0,31}$)

@@ -37,6 +37,7 @@ class BridgeConfig:
     api_token: str
     default_duration_ms: int
     default_speed: int
+    alarm_hold_seconds: int
     log_level: str
     cameras: dict[str, CameraConfig]
     listen_port: int = 8977
@@ -123,6 +124,7 @@ def parse_config(raw: object) -> BridgeConfig:
             raw.get("default_duration_ms", 250), "default_duration_ms", 50, 1500
         ),
         default_speed=_integer(raw.get("default_speed", 3), "default_speed", 1, 7),
+        alarm_hold_seconds=_integer(raw.get("alarm_hold_seconds", 10), "alarm_hold_seconds", 2, 60),
         log_level=log_level,
         cameras=cameras,
     )

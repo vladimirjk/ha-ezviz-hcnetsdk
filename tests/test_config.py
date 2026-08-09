@@ -12,6 +12,7 @@ def valid_options() -> dict[str, object]:
         "api_token": "a" * 32,
         "default_duration_ms": 250,
         "default_speed": 3,
+        "alarm_hold_seconds": 10,
         "log_level": "info",
         "cameras": [
             {
@@ -31,6 +32,7 @@ class ConfigTests(unittest.TestCase):
         config = parse_config(valid_options())
         self.assertEqual(config.cameras["cam1"].host, "192.168.0.10")
         self.assertEqual(config.default_duration_ms, 250)
+        self.assertEqual(config.alarm_hold_seconds, 10)
 
     def test_short_token_is_rejected(self) -> None:
         options = valid_options()

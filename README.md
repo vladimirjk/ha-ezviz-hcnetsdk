@@ -7,8 +7,13 @@ The bridge implements:
 
 - HCNetSDK initialization
 - Per-camera login checks
-- Bounded local PTZ movement
-- Read-only state/configuration snapshots
+- Bounded cardinal, diagonal, and zoom PTZ movement
+- Continuous auto-pan
+- Camera-stored PTZ preset control
+- Firmware-dependent PTZ cruises and recorded tracks
+- Local motion and tamper alarm events
+- Device-side manual recording start/stop
+- HA-ready connectivity, bitrate, signal, recording, motion, and SD state
 - A token-protected HTTP API
 
 It does not replace RTSP/go2rtc video or the built-in EZVIZ integration.

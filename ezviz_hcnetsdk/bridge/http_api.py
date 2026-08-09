@@ -15,7 +15,23 @@ from .config import BridgeConfig
 
 LOGGER = logging.getLogger(__name__)
 MAX_REQUEST_BYTES = 4096
-DIRECTIONS = frozenset({"up", "down", "left", "right"})
+DIRECTIONS = frozenset(
+    {
+        "up",
+        "down",
+        "left",
+        "right",
+        "up_left",
+        "up_right",
+        "down_left",
+        "down_right",
+        "zoom_in",
+        "zoom_out",
+    }
+)
+PRESET_ACTIONS = frozenset({"set", "goto", "clear"})
+CRUISE_ACTIONS = frozenset({"set_point", "clear_point", "run", "stop"})
+TRACK_ACTIONS = frozenset({"record_start", "record_stop", "run"})
 
 
 class BridgeHTTPServer(ThreadingHTTPServer):
@@ -30,7 +46,7 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
     """Create a request handler bound to one configuration and backend."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ezviz-hcnetsdk-bridge/0.5.1"
+        server_version = "ezviz-hcnetsdk-bridge/0.7.0"
         sys_version = ""
 
         def _json(self, status: HTTPStatus, body: object) -> None:
@@ -87,6 +103,14 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                 raise ValueError(f"{key} must be between {minimum} and {maximum}")
             return value
 
+        @classmethod
+        def _required_bounded_integer(
+            cls, body: dict[str, object], key: str, minimum: int, maximum: int
+        ) -> int:
+            if key not in body:
+                raise ValueError(f"{key} is required")
+            return cls._bounded_integer(body, key, 0, minimum, maximum)
+
         def do_GET(self) -> None:
             target = urlsplit(self.path)
             path = target.path
@@ -132,6 +156,27 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                     return
                 self._json(HTTPStatus.OK, result)
                 return
+            if len(parts) == 4 and parts[:2] == ["v1", "cameras"] and parts[3] == "events":
+                if not self._authorized():
+                    return
+                try:
+                    result = backend.alarm_events(parts[2])
+                except KeyError as exc:
+                    self._json(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": "unknown_camera", "detail": str(exc)},
+                    )
+                    return
+                except Exception as exc:
+                    LOGGER.exception("Camera alarm subscription failed for %s", parts[2])
+                    error_code = getattr(exc, "error_code", None)
+                    response: dict[str, object] = {"error": "camera_operation_failed"}
+                    if isinstance(error_code, int):
+                        response["sdk_error_code"] = error_code
+                    self._json(HTTPStatus.BAD_GATEWAY, response)
+                    return
+                self._json(HTTPStatus.OK, result)
+                return
             self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
         def do_POST(self) -> None:
@@ -151,7 +196,10 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                 elif operation == "ptz":
                     direction = body.get("direction")
                     if not isinstance(direction, str) or direction not in DIRECTIONS:
-                        raise ValueError("direction must be one of: up, down, left, right")
+                        raise ValueError(
+                            "direction must be one of: up, down, left, right, up_left, "
+                            "up_right, down_left, down_right, zoom_in, zoom_out"
+                        )
                     duration_ms = self._bounded_integer(
                         body,
                         "duration_ms",
@@ -161,6 +209,45 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                     )
                     speed = self._bounded_integer(body, "speed", config.default_speed, 1, 7)
                     result = backend.move(camera_id, direction, duration_ms, speed)
+                elif operation == "auto-pan":
+                    enabled = body.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be a boolean")
+                    speed = self._bounded_integer(body, "speed", config.default_speed, 1, 7)
+                    result = backend.set_auto_pan(camera_id, enabled, speed)
+                elif operation == "preset":
+                    action = body.get("action")
+                    if not isinstance(action, str) or action not in PRESET_ACTIONS:
+                        raise ValueError("action must be one of: set, goto, clear")
+                    if "preset" not in body:
+                        raise ValueError("preset is required")
+                    preset = self._bounded_integer(body, "preset", 0, 1, 255)
+                    result = backend.preset(camera_id, action, preset)
+                elif operation == "cruise":
+                    action = body.get("action")
+                    if not isinstance(action, str) or action not in CRUISE_ACTIONS:
+                        raise ValueError("action must be one of: set_point, clear_point, run, stop")
+                    route = self._required_bounded_integer(body, "route", 1, 32)
+                    cruise_args: dict[str, int] = {}
+                    if action in {"set_point", "clear_point"}:
+                        cruise_args["point"] = self._required_bounded_integer(body, "point", 1, 32)
+                        cruise_args["preset"] = self._required_bounded_integer(
+                            body, "preset", 1, 255
+                        )
+                    if action == "set_point":
+                        cruise_args["dwell"] = self._required_bounded_integer(body, "dwell", 1, 255)
+                        cruise_args["speed"] = self._required_bounded_integer(body, "speed", 1, 40)
+                    result = backend.cruise(camera_id, action, route, **cruise_args)
+                elif operation == "track":
+                    action = body.get("action")
+                    if not isinstance(action, str) or action not in TRACK_ACTIONS:
+                        raise ValueError("action must be one of: record_start, record_stop, run")
+                    result = backend.track(camera_id, action)
+                elif operation == "recording":
+                    enabled = body.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise ValueError("enabled must be a boolean")
+                    result = backend.set_manual_recording(camera_id, enabled)
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                     return

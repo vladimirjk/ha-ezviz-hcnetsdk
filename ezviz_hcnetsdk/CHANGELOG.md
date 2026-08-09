@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+- Add bounded zoom and diagonal PTZ movement plus continuous auto-pan start/stop.
+- Add preset-cruise route configuration and firmware-dependent recorded PTZ tracks.
+- Add persistent local HCNetSDK motion/tamper alarm subscriptions with configurable
+  event hold time.
+- Document Home Assistant REST commands, live state/event entities, and a complete
+  WebRTC cam2 card.
+
+## 0.6.0
+
+- Add camera-stored PTZ preset set, recall, and clear operations.
+- Add separate device-side manual-recording start and stop operations using the native
+  HCNetSDK API.
+- Document isolated live tests and Home Assistant REST commands for both operations.
+
 ## 0.5.1
 
 - Bound local SDK connect and receive waits to three seconds.

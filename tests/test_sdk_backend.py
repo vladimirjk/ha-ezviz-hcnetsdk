@@ -15,10 +15,22 @@ class FakeDevice:
 
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int, bool]] = []
+        self.preset_calls: list[tuple[int, int, int]] = []
+        self.cruise_calls: list[tuple[int, int, int, int, int]] = []
+        self.track_calls: list[tuple[int, int]] = []
         self.logged_out = False
 
     def ptz_control_with_speed(self, channel: int, command: int, speed: int, *, stop: bool) -> None:
         self.calls.append((channel, command, speed, stop))
+
+    def ptz_preset(self, channel: int, command: int, preset: int) -> None:
+        self.preset_calls.append((channel, command, preset))
+
+    def ptz_cruise(self, channel: int, command: int, route: int, point: int, value: int) -> None:
+        self.cruise_calls.append((channel, command, route, point, value))
+
+    def ptz_track(self, channel: int, command: int) -> None:
+        self.track_calls.append((channel, command))
 
     def logout(self) -> None:
         self.logged_out = True
@@ -89,6 +101,41 @@ class FakeStateReader:
         }
 
 
+class FakeRecordingController:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int, bool]] = []
+        self.error: Exception | None = None
+
+    def set_enabled(self, user_id: int, channel: int, enabled: bool) -> None:
+        self.calls.append((user_id, channel, enabled))
+        if self.error is not None:
+            raise self.error
+
+
+class FakeEventManager:
+    def __init__(self) -> None:
+        self.ensure_calls: list[tuple[str, int, int]] = []
+        self.close_calls: list[str] = []
+        self.error: Exception | None = None
+
+    def ensure_subscription(self, camera_id: str, user_id: int, channel: int) -> None:
+        self.ensure_calls.append((camera_id, user_id, channel))
+        if self.error is not None:
+            raise self.error
+
+    def close_subscription(self, camera_id: str) -> None:
+        self.close_calls.append(camera_id)
+
+    @staticmethod
+    def snapshot(_camera_id: str) -> dict[str, object]:
+        return {
+            "subscribed": True,
+            "hold_seconds": 10,
+            "motion": {"active": False, "count": 0, "last_seen": None},
+            "tamper": {"active": False, "count": 0, "last_seen": None},
+        }
+
+
 class FakeSdkError(RuntimeError):
     def __init__(self, error_code: int) -> None:
         self.error_code = error_code
@@ -99,10 +146,32 @@ class SdkBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         self.sdk = FakeSdk()
         self.state_reader = FakeStateReader()
+        self.recording_controller = FakeRecordingController()
+        self.event_manager = FakeEventManager()
         bindings = SdkBindings(
             sdk_factory=lambda: self.sdk,
-            commands={"up": 21, "down": 22, "left": 23, "right": 24},
+            commands={
+                "up": 21,
+                "down": 22,
+                "left": 23,
+                "right": 24,
+                "up_left": 25,
+                "zoom_in": 11,
+            },
+            auto_pan_command=29,
+            preset_commands={"set": 8, "clear": 9, "goto": 39},
+            cruise_commands={
+                "set_preset": 30,
+                "set_dwell": 31,
+                "set_speed": 32,
+                "clear_point": 33,
+                "run": 37,
+                "stop": 38,
+            },
+            track_commands={"record_start": 34, "record_stop": 35, "run": 36},
             state_reader_factory=lambda _sdk: self.state_reader,
+            recording_controller_factory=lambda _sdk: self.recording_controller,
+            event_manager_factory=lambda _sdk, _hold: self.event_manager,
         )
         self.waits: list[float] = []
         self.backend = HcNetSdkBackend(
@@ -129,12 +198,137 @@ class SdkBackendTests(unittest.TestCase):
             [(1, 23, 3, False), (1, 23, 3, True)],
         )
 
+    def test_diagonal_and_zoom_use_bounded_ptz_commands(self) -> None:
+        self.backend.move("cam1", "up_left", 100, 2)
+        self.backend.move("cam1", "zoom_in", 150, 4)
+
+        self.assertEqual(self.waits, [0.1, 0.15])
+        self.assertEqual(
+            self.sdk.device.calls,
+            [
+                (1, 25, 2, False),
+                (1, 25, 2, True),
+                (1, 11, 4, False),
+                (1, 11, 4, True),
+            ],
+        )
+
+    def test_auto_pan_starts_and_stops_continuous_command(self) -> None:
+        self.backend.set_auto_pan("cam1", True, 3)
+        self.backend.set_auto_pan("cam1", False, 3)
+
+        self.assertEqual(
+            self.sdk.device.calls,
+            [(1, 29, 3, False), (1, 29, 3, True)],
+        )
+
     def test_state_snapshot_uses_authenticated_camera_session(self) -> None:
         result = self.backend.state_snapshot("cam1", include_raw=True)
 
         self.assertTrue(result["read_only"])
         self.assertEqual(result["supported_queries"], 2)
         self.assertEqual(self.state_reader.calls, [(42, 1, 1, True)])
+
+    def test_preset_uses_camera_channel_and_exact_command(self) -> None:
+        result = self.backend.preset("cam1", "goto", 2)
+
+        self.assertEqual(result, {"camera": "cam1", "action": "goto", "preset": 2})
+        self.assertEqual(self.sdk.device.preset_calls, [(1, 39, 2)])
+
+    def test_unknown_preset_action_is_rejected_before_login(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported preset action"):
+            self.backend.preset("cam1", "rename", 2)
+
+        self.assertEqual(self.sdk.login_calls, [])
+
+    def test_cruise_set_point_uses_official_command_values(self) -> None:
+        result = self.backend.cruise(
+            "cam1",
+            "set_point",
+            1,
+            point=2,
+            preset=3,
+            dwell=10,
+            speed=4,
+        )
+
+        self.assertEqual(result["action"], "set_point")
+        self.assertEqual(
+            self.sdk.device.cruise_calls,
+            [
+                (1, 30, 1, 2, 3),
+                (1, 31, 1, 2, 10),
+                (1, 32, 1, 2, 4),
+            ],
+        )
+
+    def test_unknown_cruise_action_is_rejected_before_login(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported cruise action"):
+            self.backend.cruise("cam1", "rename", 1)
+
+        self.assertEqual(self.sdk.login_calls, [])
+
+    def test_bounded_move_stops_running_cruise_first(self) -> None:
+        self.backend.cruise("cam1", "run", 2)
+        self.backend.move("cam1", "right", 50, 1)
+
+        self.assertEqual(
+            self.sdk.device.cruise_calls,
+            [(1, 37, 2, 0, 0), (1, 38, 2, 0, 0)],
+        )
+        self.assertEqual(
+            self.sdk.device.calls,
+            [(1, 24, 1, False), (1, 24, 1, True)],
+        )
+
+    def test_track_record_and_run_use_official_command_values(self) -> None:
+        self.backend.track("cam1", "record_start")
+        self.backend.move("cam1", "right", 50, 1)
+        self.backend.track("cam1", "record_stop")
+        self.backend.track("cam1", "run")
+
+        self.assertEqual(
+            self.sdk.device.track_calls,
+            [(1, 34), (1, 35), (1, 36)],
+        )
+
+    def test_running_track_while_recording_is_rejected_without_disconnect(self) -> None:
+        self.backend.track("cam1", "record_start")
+
+        with self.assertRaisesRegex(ValueError, "stop track recording"):
+            self.backend.track("cam1", "run")
+
+        self.assertFalse(self.sdk.device.logged_out)
+        self.assertEqual(self.sdk.device.track_calls, [(1, 34)])
+
+    def test_manual_recording_uses_authenticated_session(self) -> None:
+        result = self.backend.set_manual_recording("cam1", False)
+
+        self.assertEqual(result, {"camera": "cam1", "manual_recording_enabled": False})
+        self.assertEqual(self.recording_controller.calls, [(42, 1, False)])
+
+    def test_manual_recording_failure_disconnects_camera(self) -> None:
+        self.recording_controller.error = FakeSdkError(19)
+
+        with self.assertRaisesRegex(FakeSdkError, "SDK error 19"):
+            self.backend.set_manual_recording("cam1", True)
+
+        self.assertTrue(self.sdk.device.logged_out)
+
+    def test_alarm_events_arms_authenticated_camera(self) -> None:
+        result = self.backend.alarm_events("cam1")
+
+        self.assertTrue(result["subscribed"])
+        self.assertEqual(self.event_manager.ensure_calls, [("cam1", 42, 1)])
+
+    def test_alarm_subscription_failure_disconnects_camera(self) -> None:
+        self.event_manager.error = FakeSdkError(23)
+
+        with self.assertRaisesRegex(FakeSdkError, "SDK error 23"):
+            self.backend.alarm_events("cam1")
+
+        self.assertTrue(self.sdk.device.logged_out)
+        self.assertEqual(self.event_manager.close_calls, ["cam1"])
 
     def test_unresponsive_snapshot_disconnects_stale_session(self) -> None:
         self.state_reader.result = {

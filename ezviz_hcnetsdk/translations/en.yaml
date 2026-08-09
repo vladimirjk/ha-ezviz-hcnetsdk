@@ -8,6 +8,9 @@ configuration:
   default_speed:
     name: Default PTZ speed
     description: Default HCNetSDK PTZ speed from 1 to 7
+  alarm_hold_seconds:
+    name: Alarm hold time
+    description: Seconds to keep motion or tamper events active after an SDK alarm upload
   log_level:
     name: Log level
     description: App log verbosity
