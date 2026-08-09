@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Remove unsupported sleep/wake, ISAPI probe, and local web-service endpoints.
+- Add an authenticated, GET-only HCNetSDK snapshot for PTZ position, recording,
+  motion/picture, stream compression, device, privacy, tracking, park action, and
+  live work state.
+- Decode stable state fields for Home Assistant REST/template entities and retain
+  per-query SDK failures for unsupported camera commands.
+
 ## 0.4.1
 
 - Run the read-only sleep probe over SDK-over-TLS on port 8443.

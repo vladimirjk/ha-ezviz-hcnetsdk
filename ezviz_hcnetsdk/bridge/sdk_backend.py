@@ -1,8 +1,7 @@
-"""Bounded HCNetSDK camera operations."""
+"""Bounded HCNetSDK camera login, PTZ, and read-only state operations."""
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -11,12 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import BridgeConfig, CameraConfig
-from .isapi_probe import NativeIsapiProbe
-from .power_control import NativePowerController, SdkOperationError
-from .tls_login import EZVIZ_TLS_PORT, NativeTlsLogin
+from .state_snapshot import HcNetSdkStateReader
 
 LOGGER = logging.getLogger(__name__)
-SERVICES_SWITCH_PATH = "/ISAPI/EZVIZ/IPC/System/servicesSwitch?format=json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,9 +21,7 @@ class SdkBindings:
 
     sdk_factory: Callable[[], Any]
     commands: dict[str, int]
-    power_controller_factory: Callable[[Any], Any]
-    isapi_probe_factory: Callable[[Any], Any]
-    tls_login_factory: Callable[[Any], Any]
+    state_reader_factory: Callable[[Any], Any]
 
 
 @dataclass(slots=True)
@@ -56,9 +50,7 @@ def load_hikvision_bindings() -> SdkBindings:
             "left": PTZ_LEFT,
             "right": PTZ_RIGHT,
         },
-        power_controller_factory=NativePowerController,
-        isapi_probe_factory=NativeIsapiProbe,
-        tls_login_factory=NativeTlsLogin,
+        state_reader_factory=HcNetSdkStateReader,
     )
 
 
@@ -70,15 +62,13 @@ class HcNetSdkBackend:
         config: BridgeConfig,
         *,
         bindings: SdkBindings | None = None,
-        sleep: Callable[[float], None] = time.sleep,
+        wait: Callable[[float], None] = time.sleep,
     ) -> None:
         self._bindings = bindings or load_hikvision_bindings()
-        self._sleep = sleep
+        self._wait = wait
         self._sdk = self._bindings.sdk_factory()
         self._sdk.init(log_level=1)
-        self._power_controller = self._bindings.power_controller_factory(self._sdk)
-        self._isapi_probe = self._bindings.isapi_probe_factory(self._sdk)
-        self._tls_login = self._bindings.tls_login_factory(self._sdk)
+        self._state_reader = self._bindings.state_reader_factory(self._sdk)
         self._sdk_version = self._sdk.get_sdk_version()
         self._closed = False
         self._sessions = {
@@ -193,7 +183,7 @@ class HcNetSdkBackend:
                 )
                 session.active_command = command
                 try:
-                    self._sleep(duration_ms / 1000)
+                    self._wait(duration_ms / 1000)
                 finally:
                     device.ptz_control_with_speed(
                         session.config.channel,
@@ -213,177 +203,27 @@ class HcNetSdkBackend:
             "speed": speed,
         }
 
-    def set_sleep(self, camera_id: str, enabled: bool) -> dict[str, object]:
+    def state_snapshot(self, camera_id: str, *, include_raw: bool = False) -> dict[str, object]:
+        """Read diagnostic state without changing camera configuration."""
         session = self._session(camera_id)
         with session.lock:
             device = self._login_locked(session)
-            previous: int | None = None
             try:
-                if enabled:
-                    previous = self._power_controller.enter_sleep(
-                        device,
-                        session.config.channel,
-                    )
-                else:
-                    self._power_controller.wake(device)
+                snapshot = self._state_reader.snapshot(
+                    device.user_id,
+                    session.config.channel,
+                    device.start_channel,
+                    include_raw=include_raw,
+                )
             except Exception:
                 self._disconnect_locked(session)
                 raise
-            self._disconnect_locked(session)
-
-        result: dict[str, object] = {
-            "camera": camera_id,
-            "sleeping": enabled,
-        }
-        if previous is not None:
-            result["previous_power_saving_control"] = previous
-        return result
-
-    def probe_sleep(self, camera_id: str) -> dict[str, object]:
-        """Read sleep-related ISAPI paths over SDK-over-TLS without changing state."""
-        session = self._session(camera_id)
-        camera = session.config
-        video_input_path = f"/ISAPI/System/Video/inputs/channels/{camera.channel}/privacyMask"
-        paths = (
-            SERVICES_SWITCH_PATH,
-            "/ISAPI/System/deviceInfo?format=json",
-            "/ISAPI/System/deviceInfo",
-            "/ISAPI/System/capabilities?format=json",
-            "/ISAPI/System/capabilities",
-            "/ISAPI/System/consumptionMode/capabilities?format=json",
-            "/ISAPI/System/consumptionMode?format=json",
-            f"{video_input_path}/capabilities",
-            video_input_path,
-        )
-        with session.lock:
-            self._disconnect_locked(session)
-            device = self._tls_login.login(
-                camera.host,
-                camera.username,
-                camera.password,
-                port=EZVIZ_TLS_PORT,
-            )
-            try:
-                queries = [self._isapi_probe.get(device, path) for path in paths]
-            finally:
-                try:
-                    self._tls_login.logout(device)
-                except Exception:
-                    LOGGER.exception(
-                        "SDK-over-TLS logout failed for camera %s",
-                        camera.camera_id,
-                    )
 
         return {
             "camera": camera_id,
             "read_only": True,
-            "transport": "sdk_over_tls",
-            "port": EZVIZ_TLS_PORT,
-            "request_framing": "app_observed_crlf",
-            "queries": queries,
-        }
-
-    @staticmethod
-    def _require_isapi_success(result: dict[str, object], action: str) -> None:
-        if result.get("sdk_ok") is True:
-            return
-        error_code = result.get("sdk_error_code")
-        if isinstance(error_code, int):
-            raise SdkOperationError(action, error_code)
-        raise RuntimeError(action)
-
-    def _read_services_switch(
-        self,
-        device: Any,
-    ) -> tuple[dict[str, object], dict[str, object]]:
-        result = self._isapi_probe.get(device, SERVICES_SWITCH_PATH)
-        self._require_isapi_success(result, "failed to read EZVIZ service switches")
-        body = result.get("body")
-        if not isinstance(body, str):
-            raise RuntimeError("camera returned no EZVIZ service-switch configuration")
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("camera returned invalid EZVIZ service-switch JSON") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("camera returned an invalid EZVIZ service-switch object")
-        services = payload.get("servicesSwitch")
-        if not isinstance(services, dict):
-            raise RuntimeError("camera response is missing servicesSwitch")
-        web = services.get("web")
-        if isinstance(web, bool) or not isinstance(web, int) or web not in (0, 1):
-            raise RuntimeError("camera response has an invalid servicesSwitch.web value")
-        return payload, services
-
-    @classmethod
-    def _require_services_switch_update_success(
-        cls,
-        result: dict[str, object],
-    ) -> None:
-        cls._require_isapi_success(
-            result,
-            "failed to update EZVIZ local web service",
-        )
-        body = result.get("body")
-        if not isinstance(body, str):
-            raise RuntimeError("camera returned no EZVIZ service-switch update status")
-        try:
-            response = json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("camera returned invalid EZVIZ service-switch update JSON") from exc
-        if not isinstance(response, dict):
-            raise RuntimeError("camera returned an invalid EZVIZ service-switch update object")
-        status_code = response.get("statusCode")
-        if isinstance(status_code, bool) or status_code != 1:
-            raise RuntimeError(
-                f"camera rejected the EZVIZ service-switch update (statusCode={status_code!r})"
-            )
-
-    def set_web(self, camera_id: str, enabled: bool) -> dict[str, object]:
-        """Change only the EZVIZ local web-service switch and verify it."""
-        session = self._session(camera_id)
-        with session.lock:
-            self._disconnect_locked(session)
-            camera = session.config
-            device = self._tls_login.login(
-                camera.host,
-                camera.username,
-                camera.password,
-                port=EZVIZ_TLS_PORT,
-            )
-            try:
-                payload, before = self._read_services_switch(device)
-                before_web = bool(before["web"])
-                changed = before_web != enabled
-                if changed:
-                    updated_payload = dict(payload)
-                    updated_services = dict(before)
-                    updated_services["web"] = int(enabled)
-                    updated_payload["servicesSwitch"] = updated_services
-                    update_result = self._isapi_probe.put_json(
-                        device,
-                        SERVICES_SWITCH_PATH,
-                        updated_payload,
-                    )
-                    self._require_services_switch_update_success(update_result)
-                _verified_payload, after = self._read_services_switch(device)
-                if bool(after["web"]) != enabled:
-                    raise RuntimeError("camera did not apply the local web-service switch")
-            finally:
-                try:
-                    self._tls_login.logout(device)
-                except Exception:
-                    LOGGER.exception(
-                        "SDK-over-TLS logout failed for camera %s",
-                        camera.camera_id,
-                    )
-
-        return {
-            "camera": camera_id,
-            "web_enabled": enabled,
-            "changed": changed,
-            "before": before,
-            "after": after,
+            "configured_channel": session.config.channel,
+            **snapshot,
         }
 
     def close(self) -> None:

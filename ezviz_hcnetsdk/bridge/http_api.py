@@ -9,7 +9,7 @@ from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .config import BridgeConfig
 
@@ -30,7 +30,7 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
     """Create a request handler bound to one configuration and backend."""
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "ezviz-hcnetsdk-bridge/0.4.1"
+        server_version = "ezviz-hcnetsdk-bridge/0.5.0"
         sys_version = ""
 
         def _json(self, status: HTTPStatus, body: object) -> None:
@@ -88,7 +88,8 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
             return value
 
         def do_GET(self) -> None:
-            path = urlsplit(self.path).path
+            target = urlsplit(self.path)
+            path = target.path
             if path == "/health":
                 self._json(HTTPStatus.OK, {"status": "ok"})
                 return
@@ -97,20 +98,32 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                     self._json(HTTPStatus.OK, backend.status())
                 return
             parts = [part for part in path.split("/") if part]
-            if len(parts) == 4 and parts[:2] == ["v1", "cameras"] and parts[3] == "sleep-probe":
+            if len(parts) == 4 and parts[:2] == ["v1", "cameras"] and parts[3] == "state-snapshot":
                 if not self._authorized():
                     return
-                camera_id = parts[2]
+                raw_values = parse_qs(target.query, keep_blank_values=True).get("raw", [])
+                if any(value not in {"0", "1"} for value in raw_values) or len(raw_values) > 1:
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": "invalid_request", "detail": "raw must be 0 or 1"},
+                    )
+                    return
                 try:
-                    result = backend.probe_sleep(camera_id)
+                    result = backend.state_snapshot(parts[2], include_raw=raw_values == ["1"])
                 except KeyError as exc:
                     self._json(
                         HTTPStatus.NOT_FOUND,
                         {"error": "unknown_camera", "detail": str(exc)},
                     )
                     return
+                except ValueError as exc:
+                    self._json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": "invalid_request", "detail": str(exc)},
+                    )
+                    return
                 except Exception as exc:
-                    LOGGER.exception("Camera operation failed for %s", camera_id)
+                    LOGGER.exception("Camera state read failed for %s", parts[2])
                     error_code = getattr(exc, "error_code", None)
                     response: dict[str, object] = {"error": "camera_operation_failed"}
                     if isinstance(error_code, int):
@@ -148,16 +161,6 @@ def handler_factory(config: BridgeConfig, backend: Any) -> type[BaseHTTPRequestH
                     )
                     speed = self._bounded_integer(body, "speed", config.default_speed, 1, 7)
                     result = backend.move(camera_id, direction, duration_ms, speed)
-                elif operation == "sleep":
-                    enabled = body.get("enabled")
-                    if not isinstance(enabled, bool):
-                        raise ValueError("enabled must be a boolean")
-                    result = backend.set_sleep(camera_id, enabled)
-                elif operation == "web":
-                    enabled = body.get("enabled")
-                    if not isinstance(enabled, bool):
-                        raise ValueError("enabled must be a boolean")
-                    result = backend.set_web(camera_id, enabled)
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
                     return

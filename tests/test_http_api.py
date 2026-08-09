@@ -16,9 +16,7 @@ from test_config import valid_options
 class FakeBackend:
     def __init__(self) -> None:
         self.moves: list[tuple[str, str, int, int]] = []
-        self.sleep_calls: list[tuple[str, bool]] = []
-        self.sleep_probe_calls: list[str] = []
-        self.web_calls: list[tuple[str, bool]] = []
+        self.snapshots: list[tuple[str, bool]] = []
 
     def status(self) -> dict[str, object]:
         return {"sdk_version": "test", "cameras": {"cam1": {"connected": False}}}
@@ -36,23 +34,16 @@ class FakeBackend:
         self.moves.append((camera_id, direction, duration_ms, speed))
         return {"camera": camera_id, "direction": direction}
 
-    def set_sleep(self, camera_id: str, enabled: bool) -> dict[str, object]:
+    def state_snapshot(self, camera_id: str, *, include_raw: bool) -> dict[str, object]:
         if camera_id != "cam1":
             raise KeyError(camera_id)
-        self.sleep_calls.append((camera_id, enabled))
-        return {"camera": camera_id, "sleeping": enabled}
-
-    def probe_sleep(self, camera_id: str) -> dict[str, object]:
-        if camera_id != "cam1":
-            raise KeyError(camera_id)
-        self.sleep_probe_calls.append(camera_id)
-        return {"camera": camera_id, "read_only": True, "queries": []}
-
-    def set_web(self, camera_id: str, enabled: bool) -> dict[str, object]:
-        if camera_id != "cam1":
-            raise KeyError(camera_id)
-        self.web_calls.append((camera_id, enabled))
-        return {"camera": camera_id, "web_enabled": enabled, "changed": True}
+        self.snapshots.append((camera_id, include_raw))
+        return {
+            "camera": camera_id,
+            "read_only": True,
+            "supported_queries": 3,
+            "queries": {},
+        }
 
 
 class HttpApiTests(unittest.TestCase):
@@ -106,6 +97,41 @@ class HttpApiTests(unittest.TestCase):
         status, _ = self.request("POST", "/v1/cameras/cam1/test")
         self.assertEqual(status, 401)
 
+    def test_state_snapshot_requires_token(self) -> None:
+        status, _ = self.request("GET", "/v1/cameras/cam1/state-snapshot")
+        self.assertEqual(status, 401)
+
+    def test_state_snapshot(self) -> None:
+        status, body = self.request(
+            "GET",
+            "/v1/cameras/cam1/state-snapshot?raw=1",
+            token=self.config.api_token,
+        )
+        self.assertEqual(status, 200)
+        assert isinstance(body, dict)
+        self.assertTrue(body["read_only"])
+        self.assertEqual(self.backend.snapshots, [("cam1", True)])
+
+    def test_state_snapshot_rejects_invalid_raw_option(self) -> None:
+        status, body = self.request(
+            "GET",
+            "/v1/cameras/cam1/state-snapshot?raw=yes",
+            token=self.config.api_token,
+        )
+        self.assertEqual(status, 400)
+        assert isinstance(body, dict)
+        self.assertEqual(body["error"], "invalid_request")
+
+    def test_state_snapshot_unknown_camera_is_404(self) -> None:
+        status, body = self.request(
+            "GET",
+            "/v1/cameras/missing/state-snapshot",
+            token=self.config.api_token,
+        )
+        self.assertEqual(status, 404)
+        assert isinstance(body, dict)
+        self.assertEqual(body["error"], "unknown_camera")
+
     def test_camera_login_test(self) -> None:
         status, body = self.request("POST", "/v1/cameras/cam1/test", token=self.config.api_token)
         self.assertEqual(status, 200)
@@ -138,59 +164,20 @@ class HttpApiTests(unittest.TestCase):
         assert isinstance(body, dict)
         self.assertEqual(body["error"], "unknown_camera")
 
-    def test_sleep_accepts_boolean(self) -> None:
-        status, body = self.request(
-            "POST",
-            "/v1/cameras/cam1/sleep",
-            {"enabled": True},
-            token=self.config.api_token,
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(body, {"camera": "cam1", "sleeping": True})
-        self.assertEqual(self.backend.sleep_calls, [("cam1", True)])
-
-    def test_sleep_rejects_non_boolean(self) -> None:
-        status, body = self.request(
-            "POST",
-            "/v1/cameras/cam1/sleep",
-            {"enabled": "true"},
-            token=self.config.api_token,
-        )
-        self.assertEqual(status, 400)
-        assert isinstance(body, dict)
-        self.assertEqual(body["error"], "invalid_request")
-
-    def test_sleep_probe_requires_token(self) -> None:
-        status, body = self.request("GET", "/v1/cameras/cam1/sleep-probe")
-
-        self.assertEqual(status, 401)
-        self.assertIsNone(body)
-
-    def test_sleep_probe_is_read_only_get(self) -> None:
-        status, body = self.request(
-            "GET",
-            "/v1/cameras/cam1/sleep-probe",
-            token=self.config.api_token,
-        )
-
-        self.assertEqual(status, 200)
-        self.assertEqual(body, {"camera": "cam1", "read_only": True, "queries": []})
-        self.assertEqual(self.backend.sleep_probe_calls, ["cam1"])
-
-    def test_web_service_accepts_boolean(self) -> None:
-        status, body = self.request(
-            "POST",
-            "/v1/cameras/cam1/web",
-            {"enabled": True},
-            token=self.config.api_token,
-        )
-
-        self.assertEqual(status, 200)
-        self.assertEqual(
-            body,
-            {"camera": "cam1", "web_enabled": True, "changed": True},
-        )
-        self.assertEqual(self.backend.web_calls, [("cam1", True)])
+    def test_removed_experimental_endpoints_are_404(self) -> None:
+        for method, path in (
+            ("POST", "/v1/cameras/cam1/sleep"),
+            ("GET", "/v1/cameras/cam1/sleep-probe"),
+            ("POST", "/v1/cameras/cam1/web"),
+        ):
+            with self.subTest(method=method, path=path):
+                status, body = self.request(
+                    method,
+                    path,
+                    token=self.config.api_token,
+                )
+                self.assertEqual(status, 404)
+                self.assertEqual(body, {"error": "not_found"})
 
 
 if __name__ == "__main__":

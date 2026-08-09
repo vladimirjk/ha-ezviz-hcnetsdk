@@ -1,7 +1,7 @@
 # EZVIZ HCNetSDK Bridge
 
-Local, experimental PTZ and sleep bridge for compatible EZVIZ cameras exposing the
-Hikvision HCNetSDK service on TCP port 8000. It includes a read-only ISAPI capability
-probe for cameras that reject the legacy sleep command.
+Local PTZ and read-only state bridge for compatible EZVIZ cameras exposing the
+Hikvision HCNetSDK service on TCP port 8000. Camera writes are limited to bounded PTZ;
+failed sleep/wake and web-service experiments are not exposed.
 
 See [DOCS.md](DOCS.md) for setup and API examples.

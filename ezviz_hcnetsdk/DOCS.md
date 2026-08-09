@@ -1,8 +1,8 @@
 # EZVIZ HCNetSDK Bridge
 
-This app exposes bounded PTZ commands over a small local HTTP API. It downloads
-Hikvision's official Linux x86-64 HCNetSDK during the image build and does not store
-camera credentials in the repository.
+This app exposes bounded PTZ commands and read-only state snapshots over a small local
+HTTP API. It downloads Hikvision's official Linux x86-64 HCNetSDK during the image
+build and does not store camera credentials in the repository.
 
 ## Installation
 
@@ -86,88 +86,42 @@ curl --fail-with-body \
 Allowed directions are `up`, `down`, `left`, and `right`. Duration is restricted to
 50-1500 milliseconds and speed to 1-7.
 
-## Read-only sleep capability probe
+## Read-only state snapshot
 
-Some EZVIZ firmware does not support the module-service command used by the sleep
-endpoint. The bridge includes an ISAPI probe through the authenticated HCNetSDK session:
+The snapshot endpoint performs only HCNetSDK GET calls. It independently checks PTZ
+position, picture/motion configuration, recording configuration, compression, device
+state, privacy-mask enable, smart tracking, park action, and live work state:
 
 ```bash
 curl --fail-with-body \
   --header "Authorization: Bearer YOUR_API_TOKEN" \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep-probe
+  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/state-snapshot | jq
 ```
 
-The probe sends only `GET` requests. Version 0.4.1 uses SDK-over-TLS on port 8443 and
-the CRLF request framing seen in the EZVIZ Android app. It checks the app's
-`servicesSwitch` endpoint, generic device capabilities, consumption mode, and the
-configured channel's privacy-mask paths. It does not write configuration or change the
-camera. Its response includes the ISAPI body or status for each request.
+An unsupported camera command remains in the response with `sdk_ok: false` and its
+`sdk_error_code`; the other reads continue. A successful query contains decoded
+`values` and a SHA-256 fingerprint of the exact SDK structure.
 
-## Local web and ISAPI service
-
-If the probe returns a `servicesSwitch` body with `"web":0`, the camera's local HTTP
-and standard ISAPI service is disabled. Version 0.4.0 uses EZVIZ's SDK-over-TLS login
-on port 8443 to change only that switch while preserving the complete service
-configuration. Enabling it changes camera state:
+To identify firmware fields changed by EZVIZ cloud Sleep Mode, capture both states:
 
 ```bash
 curl --fail-with-body \
-  --request POST \
   --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"enabled":true}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/web
-```
+  'http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/state-snapshot?raw=1' \
+  > cam2-awake.json
 
-The bridge reads the complete `servicesSwitch` object, changes only `web`, writes it,
-requires the camera to return `statusCode: 1`, then reads it again and fails unless
-the requested value is verified. Disable it by sending `{"enabled":false}` to the
-same endpoint. Port 8443 must be reachable from the app container.
-
-After enabling it, check the camera directly:
-
-```bash
-nc -zv CAMERA_IP 80
-curl --fail-with-body --digest --user admin http://CAMERA_IP/ISAPI/System/deviceInfo
-```
-
-The second command prompts for the camera password.
-
-## Manual sleep and wake test
-
-Sleep uses the camera module's HCNetSDK power-saving setting. The bridge first reads
-the complete setting, changes only the sleep byte, and writes it back. Wake uses the
-SDK's dedicated remote-power-on command.
-
-This legacy sleep path is not supported by every camera. In particular, an HCNetSDK
-error `23` while reading the module-service configuration means the camera rejected
-the command before any write was attempted. Use the read-only probe above instead of
-repeating that sleep request.
-
-Keep the built-in EZVIZ sleep switch available as a fallback during the first test.
-Put `cam2` to sleep with:
-
-```bash
+# Enable Sleep Mode in the EZVIZ mobile app, then run the same request:
 curl --fail-with-body \
-  --request POST \
   --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"enabled":true}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep
+  'http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/state-snapshot?raw=1' \
+  > cam2-sleep.json
+
+diff -u <(jq -S . cam2-awake.json) <(jq -S . cam2-sleep.json)
 ```
 
-Wake it with the same endpoint and `false`:
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"enabled":false}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/sleep
-```
-
-The video stream can take several seconds to reconnect after wake.
+`raw=1` includes bounded Base64 structures for field discovery. Raw device and work
+state structures are always omitted because they can contain a serial number or LAN
+client addresses.
 
 ## Home Assistant configuration
 
@@ -189,14 +143,6 @@ rest_command:
       Content-Type: application/json
     payload: >-
       {"direction":"{{ direction }}","duration_ms":{{ duration_ms | default(250) }},"speed":{{ speed | default(3) }}}
-  ezviz_local_sleep:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/sleep"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"enabled":{{ enabled | tojson }}}
 ```
 
 If `configuration.yaml` already has a top-level `rest_command:` section, add only
@@ -239,23 +185,70 @@ ptz:
     direction: down
     duration_ms: 250
     speed: 3
-shortcuts:
-  - name: Sleep
-    icon: mdi:sleep
-    service: rest_command.ezviz_local_sleep
-    service_data:
-      camera: cam2
-      enabled: true
-  - name: Wake
-    icon: mdi:weather-sunny
-    service: rest_command.ezviz_local_sleep
-    service_data:
-      camera: cam2
-      enabled: false
 ```
 
-Local sleep and wake are experimental. The existing built-in EZVIZ integration can
-remain configured as a fallback.
+The same endpoint can be polled as a REST sensor. Do not add another top-level
+`sensor:` or `template:` key if one already exists; merge the entries instead:
+
+```yaml
+sensor:
+  - platform: rest
+    name: EZVIZ cam2 SDK state
+    unique_id: ezviz_cam2_sdk_state
+    resource: "http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/state-snapshot"
+    headers:
+      Authorization: !secret ezviz_hcnetsdk_authorization
+    scan_interval: 30
+    timeout: 15
+    value_template: "{{ value_json.supported_queries }}"
+    json_attributes:
+      - failed_queries
+      - queries
+
+template:
+  - binary_sensor:
+      - name: EZVIZ cam2 recording
+        unique_id: ezviz_cam2_recording
+        availability: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('work_state', {}).get('sdk_ok') == true }}
+        state: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('work_state', {}).get('values', {}).get('channel', {}).get('recording') }}
+
+      - name: EZVIZ cam2 motion detection configured
+        unique_id: ezviz_cam2_motion_detection_configured
+        availability: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('picture', {}).get('sdk_ok') == true }}
+        state: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('picture', {}).get('values', {}).get('motion_detection_enabled') }}
+
+      - name: EZVIZ cam2 privacy mask configured
+        unique_id: ezviz_cam2_privacy_mask_configured
+        availability: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('privacy_mask', {}).get('sdk_ok') == true }}
+        state: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('privacy_mask', {}).get('values', {}).get('enabled') }}
+
+  - sensor:
+      - name: EZVIZ cam2 pan position
+        unique_id: ezviz_cam2_pan_position
+        unit_of_measurement: "°"
+        availability: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('ptz_position', {}).get('sdk_ok') == true }}
+        state: >-
+          {% set q = state_attr('sensor.ezviz_cam2_sdk_state', 'queries') | default({}, true) %}
+          {{ q.get('ptz_position', {}).get('values', {}).get('pan_degrees') }}
+```
+
+The recording entity is live status from `NET_DVR_GetDVRWorkState_V30`. The motion and
+privacy entities show whether those features are configured, not whether motion is
+currently being detected.
 
 ## Errors
 
