@@ -1,9 +1,9 @@
 # EZVIZ HCNetSDK Bridge
 
-This app exposes bounded and continuous PTZ commands, camera-stored presets, cruises,
-recorded PTZ tracks, local motion/tamper alarms, and state snapshots over a small local
-HTTP API. It downloads Hikvision's official Linux x86-64 HCNetSDK during the image
-build and does not store camera credentials in the repository.
+This app exposes verified bounded PTZ, local motion/tamper alarms, and state snapshots
+over a small local HTTP API. It also contains firmware-dependent extended PTZ APIs for
+testing compatible cameras. It downloads Hikvision's official Linux x86-64 HCNetSDK
+during the image build and does not store camera credentials in the repository.
 
 ## Installation
 
@@ -85,133 +85,44 @@ curl --fail-with-body \
   http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/ptz
 ```
 
-Allowed directions are `up`, `down`, `left`, `right`, `up_left`, `up_right`,
-`down_left`, `down_right`, `zoom_in`, and `zoom_out`. Duration is restricted to
-50-1500 milliseconds and speed to 1-7. Every request sends a matching stop command,
-including zoom and diagonal movement.
+The API accepts `up`, `down`, `left`, `right`, `up_left`, `up_right`, `down_left`,
+`down_right`, `zoom_in`, and `zoom_out`. Duration is restricted to 50-1500 milliseconds
+and speed to 1-7. Every request sends a matching stop command.
 
-## Auto-pan test
+Only `up`, `down`, `left`, and `right` are verified on the tested
+CS-H6c-R101-1G2WF. That camera rejects diagonal and zoom commands with HCNetSDK error
+`11`. Its lens has no SDK-controlled optical zoom; use the WebRTC card's client-side
+digital zoom instead.
 
-Auto-pan is continuous, so always test its stop request immediately after its start
-request:
+## Firmware-dependent PTZ APIs
 
-```bash
-# Start
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"enabled":true,"speed":3}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/auto-pan
+The bridge implements the standard HCNetSDK operations below for testing other camera
+models, but they are not part of the default H6c Home Assistant setup:
 
-# Stop
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"enabled":false,"speed":3}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/auto-pan
+| Endpoint | Actions | Tested H6c result |
+| --- | --- | --- |
+| `/auto-pan` | `enabled: true/false`, speed 1-7 | Start rejected with error `11` |
+| `/preset` | `set`, `goto`, `clear`; presets 1-255 | `set` rejected with error `11` |
+| `/cruise` | `set_point`, `clear_point`, `run`, `stop` | Not usable because presets are unsupported |
+| `/track` | `record_start`, `record_stop`, `run` | Playback without a recorded track rejected with error `11` |
+
+Error `11` (`NET_DVR_NETWORK_ERRORDATA`) is misleadingly worded: it means the data
+sent to the device is illegal or unsupported, or its response is invalid. It does not
+by itself indicate a Wi-Fi failure. Do not repeatedly retry a command returning `11`.
+
+The accepted JSON bodies are:
+
+```text
+POST /v1/cameras/{camera}/auto-pan  {"enabled":true,"speed":3}
+POST /v1/cameras/{camera}/preset    {"action":"set","preset":1}
+POST /v1/cameras/{camera}/cruise    {"action":"run","route":1}
+POST /v1/cameras/{camera}/track     {"action":"run"}
 ```
 
-Any bounded PTZ move, preset recall, cruise, or track command also stops an active
-auto-pan first.
-
-## PTZ preset test
-
-The tested H6c accepts a PTZ-position query but returns zero for every coordinate, so
-the bridge cannot reliably read and restore an absolute position. Camera-stored PTZ
-presets avoid that problem.
-
-With the camera at its normal viewing position, save preset 1:
-
-```bash
-curl --fail-with-body \
-  --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"set","preset":1}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/preset
-```
-
-Use the bounded PTZ endpoint to point the camera at a wall or into its enclosure, then
-save that as preset 2 by changing `preset` to `2`. Test both positions without
-overwriting them:
-
-```bash
-# Normal position
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"goto","preset":1}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/preset
-
-# Privacy position
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"goto","preset":2}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/preset
-```
-
-Actions are `set`, `goto`, and `clear`; preset numbers are restricted to 1-255. These
-writes use the camera's preset storage and should be tested before adding an HA script.
-
-## Cruises and recorded PTZ tracks
-
-These operations depend on camera firmware. Configure cruise route 1, point 1 to use
-preset 1, wait 10 seconds, and move at speed 3:
-
-```bash
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"set_point","route":1,"point":1,"preset":1,"dwell":10,"speed":3}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/cruise
-
-# Add a second point by changing point and preset, then run route 1
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"run","route":1}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/cruise
-
-# Stop route 1
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"stop","route":1}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/cruise
-```
-
-Routes and points are 1-32, presets 1-255, dwell 1-255, and speed 1-40. Remove a route
-point with `{"action":"clear_point","route":1,"point":1,"preset":1}`.
-
-A recorded PTZ track stores manual moves performed between `record_start` and
-`record_stop`, then replays them with `run`:
-
-```bash
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"record_start"}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/track
-
-# Move the camera with /ptz requests, then stop recording the track
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"record_stop"}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/track
-
-# Replay the recorded track
-curl --fail-with-body --request POST \
-  --header "Authorization: Bearer YOUR_API_TOKEN" \
-  --header "Content-Type: application/json" \
-  --data '{"action":"run"}' \
-  http://HOME_ASSISTANT_IP:8977/v1/cameras/cam2/track
-```
-
-HCNetSDK has no separate stop-playback command for this track API. A bounded PTZ move
-interrupts it. An SDK error such as `23` means that operation is unavailable on the
-camera firmware.
+Cruise configuration additionally uses `point` 1-32, `preset` 1-255, `dwell` 1-255,
+and `speed` 1-40. Recorded tracks must be created with `record_start`, bounded PTZ
+moves, and `record_stop` before `run`. HCNetSDK exposes no separate stop-playback call;
+a bounded PTZ move interrupts playback.
 
 ## Manual recording test
 
@@ -237,8 +148,8 @@ curl --fail-with-body --request POST \
 
 The current cam2 snapshot reports no disk and no active device recording. The camera
 may therefore reject these calls, commonly with an SDK error such as `19` or `23`, or
-accept them without changing cloud behavior. A recording failure does not affect the
-separate preset operation.
+accept them without changing cloud behavior. Recording control is independent of the
+verified cardinal PTZ path and is omitted from the default HA configuration.
 
 ## Read-only state snapshot
 
@@ -334,68 +245,15 @@ rest_command:
       Content-Type: application/json
     payload: >-
       {"direction":"{{ direction }}","duration_ms":{{ duration_ms | default(250) }},"speed":{{ speed | default(3) }}}
-
-  ezviz_local_auto_pan:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/auto-pan"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"enabled":{{ enabled | bool | lower }},"speed":{{ speed | default(3) }}}
-
-  ezviz_local_preset:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/preset"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"action":"{{ action }}","preset":{{ preset }}}
-
-  ezviz_local_cruise:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/cruise"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"action":"{{ action }}","route":{{ route | default(1) }},"point":{{ point | default(1) }},"preset":{{ preset | default(1) }},"dwell":{{ dwell | default(10) }},"speed":{{ speed | default(3) }}}
-
-  ezviz_local_track:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/track"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"action":"{{ action }}"}
-
-  ezviz_local_manual_recording:
-    url: "http://HOME_ASSISTANT_IP:8977/v1/cameras/{{ camera }}/recording"
-    method: POST
-    headers:
-      Authorization: !secret ezviz_hcnetsdk_authorization
-      Content-Type: application/json
-    payload: >-
-      {"enabled":{{ enabled | lower }}}
 ```
 
 If `configuration.yaml` already has a top-level `rest_command:` section, add only
-the named commands beneath the existing section. YAML cannot contain a second
+the `ezviz_local_ptz` command beneath the existing section. YAML cannot contain a second
 top-level `rest_command:` key.
 
-Check configuration and restart Home Assistant. First use **Developer tools > Actions**
-to test `rest_command.ezviz_local_preset` with this data before configuring cruises:
-
-```yaml
-camera: cam2
-action: set
-preset: 1
-```
-
-The WebRTC card keeps video on WebRTC and sends only controls through the local REST
-bridge. Replace `ezviz2` if your go2rtc stream has a different name:
+Check configuration and restart Home Assistant. The WebRTC card keeps video on WebRTC,
+sends the four verified motor controls through the local REST bridge, and performs zoom
+inside the browser. Replace `ezviz2` if your go2rtc stream has a different name:
 
 ```yaml
 type: custom:webrtc-camera
@@ -407,6 +265,14 @@ audio: true
 muted: false
 media_player: true
 ui: true
+digital_ptz:
+  mouse_drag_pan: true
+  mouse_wheel_zoom: true
+  mouse_double_click_zoom: true
+  touch_drag_pan: true
+  touch_pinch_zoom: true
+  touch_tap_drag_zoom: true
+  persist: true
 ptz:
   opacity: 0.7
   service: rest_command.ezviz_local_ptz
@@ -430,97 +296,6 @@ ptz:
     direction: down
     duration_ms: 250
     speed: 3
-  data_zoom_in:
-    camera: cam2
-    direction: zoom_in
-    duration_ms: 250
-    speed: 3
-  data_zoom_out:
-    camera: cam2
-    direction: zoom_out
-    duration_ms: 250
-    speed: 3
-shortcuts:
-  - name: Up-left
-    icon: mdi:arrow-top-left
-    service: rest_command.ezviz_local_ptz
-    service_data:
-      camera: cam2
-      direction: up_left
-      duration_ms: 250
-      speed: 3
-  - name: Up-right
-    icon: mdi:arrow-top-right
-    service: rest_command.ezviz_local_ptz
-    service_data:
-      camera: cam2
-      direction: up_right
-      duration_ms: 250
-      speed: 3
-  - name: Down-left
-    icon: mdi:arrow-bottom-left
-    service: rest_command.ezviz_local_ptz
-    service_data:
-      camera: cam2
-      direction: down_left
-      duration_ms: 250
-      speed: 3
-  - name: Down-right
-    icon: mdi:arrow-bottom-right
-    service: rest_command.ezviz_local_ptz
-    service_data:
-      camera: cam2
-      direction: down_right
-      duration_ms: 250
-      speed: 3
-  - name: Preset 1
-    icon: mdi:numeric-1-box
-    service: rest_command.ezviz_local_preset
-    service_data:
-      camera: cam2
-      action: goto
-      preset: 1
-  - name: Preset 2
-    icon: mdi:numeric-2-box
-    service: rest_command.ezviz_local_preset
-    service_data:
-      camera: cam2
-      action: goto
-      preset: 2
-  - name: Auto-pan
-    icon: mdi:pan-horizontal
-    service: rest_command.ezviz_local_auto_pan
-    service_data:
-      camera: cam2
-      enabled: true
-      speed: 3
-  - name: Stop pan
-    icon: mdi:stop
-    service: rest_command.ezviz_local_auto_pan
-    service_data:
-      camera: cam2
-      enabled: false
-      speed: 3
-  - name: Cruise 1
-    icon: mdi:map-marker-path
-    service: rest_command.ezviz_local_cruise
-    service_data:
-      camera: cam2
-      action: run
-      route: 1
-  - name: Stop cruise
-    icon: mdi:stop-circle-outline
-    service: rest_command.ezviz_local_cruise
-    service_data:
-      camera: cam2
-      action: stop
-      route: 1
-  - name: Play track
-    icon: mdi:motion-play-outline
-    service: rest_command.ezviz_local_track
-    service_data:
-      camera: cam2
-      action: run
 ```
 
 Add both REST sensors to the same existing top-level `sensor:` section. The events
@@ -670,6 +445,7 @@ Common HCNetSDK error codes:
 - `1`: wrong username or password
 - `7`: network connection failed
 - `10`: receive timeout
+- `11`: command data is illegal or unsupported by the device
 - `23`: command unsupported by this camera
 - `47`: user temporarily locked after failed logins
 

@@ -6,8 +6,10 @@
 - Add preset-cruise route configuration and firmware-dependent recorded PTZ tracks.
 - Add persistent local HCNetSDK motion/tamper alarm subscriptions with configurable
   event hold time.
-- Document Home Assistant REST commands, live state/event entities, and a complete
-  WebRTC cam2 card.
+- Document live H6c compatibility results: cardinal PTZ works, while diagonal, optical
+  zoom, auto-pan, and preset storage are rejected with SDK error 11.
+- Keep firmware-dependent APIs documented for other models, but use only verified
+  cardinal PTZ and browser-side digital zoom in the default cam2 card.
 
 ## 0.6.0
 

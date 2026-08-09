@@ -7,10 +7,8 @@ The bridge implements:
 
 - HCNetSDK initialization
 - Per-camera login checks
-- Bounded cardinal, diagonal, and zoom PTZ movement
-- Continuous auto-pan
-- Camera-stored PTZ preset control
-- Firmware-dependent PTZ cruises and recorded tracks
+- Verified bounded cardinal PTZ on the tested H6c
+- Firmware-dependent diagonal/zoom, auto-pan, preset, cruise, and track APIs
 - Local motion and tamper alarm events
 - Device-side manual recording start/stop
 - HA-ready connectivity, bitrate, signal, recording, motion, and SD state
